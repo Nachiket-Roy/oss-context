@@ -12,18 +12,6 @@ This repository now contains the core foundation for local sync, review intellig
 - Cross-repo dashboard and reviewer-load queries
 - Basic CI for linting and tests
 
-## Status
-
-Implemented in this branch:
-
-- project scaffolding, schema, GitHub sync engine, and CLI basics
-- decision extraction, context assembly, health summaries, and rich output
-- MCP tools and resources for PR context, issue context, and unresolved state
-- cross-repo queries, reviewer-status summaries, dashboard metrics, and a local HTML UI
-- branch-aware PR resolution, file-level context, and warning-only git hook installation
-
-Future work is tracked in `future_work.md`
-
 ## Installation
 
 This README is the primary user and contributor guide for the repository.
