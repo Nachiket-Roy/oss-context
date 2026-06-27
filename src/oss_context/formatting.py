@@ -1,8 +1,8 @@
 """Rich terminal rendering helpers for oss-context output.
 
 This module turns sync reports, unresolved thread lists, extracted decisions,
-PR and issue context payloads, reviewer status, and dashboard summaries into
-readable panels and tables for CLI users.
+PR and issue context payloads, branch-aware workflow data, reviewer status, and
+dashboard summaries into readable panels and tables for CLI users.
 """
 
 from __future__ import annotations
@@ -294,6 +294,63 @@ def render_tracked_repos(rows: list[dict]) -> Panel:
         )
 
     return Panel(table, title="Tracked repos", border_style="blue")
+
+
+def render_branch_resolution(payload: dict) -> Panel:
+    """Render how a branch was resolved to a pull request."""
+    metrics = Table.grid(padding=(0, 2))
+    metrics.add_row("Repo", payload["repo"])
+    metrics.add_row("Branch", payload["branch"])
+    metrics.add_row("PR", f"#{payload['pr_number']}")
+    metrics.add_row("Resolution", payload["source"].replace("_", " "))
+    metrics.add_row("Repo root", payload["repo_root"])
+    return Panel(metrics, title="Current branch PR", border_style="cyan")
+
+
+def render_branch_context(payload: dict) -> Group:
+    """Render branch metadata followed by the resolved PR context."""
+    resolution = render_branch_resolution(
+        {
+            "repo": payload["repo"],
+            "branch": payload["branch"],
+            "pr_number": payload["pr_number"],
+            "source": payload["resolution_source"],
+            "repo_root": payload["repo_root"],
+        }
+    )
+    return Group(resolution, Text(""), render_pr_context(payload["pr_context"]))
+
+
+def render_branch_file_context(payload: dict) -> Panel:
+    """Render unresolved review state for a single file on the current branch PR."""
+    metrics = Table.grid(padding=(0, 2))
+    metrics.add_row("Repo", payload["repo"])
+    metrics.add_row("Branch", payload["branch"])
+    metrics.add_row("PR", f"#{payload['pr_number']}")
+    metrics.add_row("File", payload["file_path"])
+    metrics.add_row("Resolution", payload["resolution_source"].replace("_", " "))
+
+    if not payload["threads"]:
+        return Panel(
+            Group(metrics, Text(""), Text("No unresolved threads for this file.")),
+            title="File context",
+            border_style="green",
+        )
+
+    table = Table(show_header=True)
+    table.add_column("Reviewer")
+    table.add_column("Decision")
+    table.add_column("Waiting on")
+    table.add_column("Summary", overflow="fold")
+    for row in payload["threads"]:
+        table.add_row(row["reviewer"], row["decision_type"], row["waiting_on"], row["summary"])
+    return Panel(Group(metrics, Text(""), table), title="File context", border_style="yellow")
+
+
+def render_hook_installation(paths: list[str]) -> Panel:
+    """Render the result of installing git hooks."""
+    body = Text("Installed hooks:\n" + "\n".join(f"- {path}" for path in paths))
+    return Panel(body, title="Git hooks installed", border_style="green")
 
 
 def render_reviewer_status(status: dict) -> Panel:

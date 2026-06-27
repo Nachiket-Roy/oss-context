@@ -20,10 +20,11 @@ Implemented in this branch:
 - Phase 1: decision extraction, context assembly, health summaries, rich output
 - Phase 2: MCP server with tools and resources for PR context, issue context, and unresolved state
 - Phase 3: cross-repo queries, reviewer-status summaries, dashboard metrics, and a local HTML UI
+- Phase 4: branch-aware PR resolution, file-level context, and warning-only git hook installation
 
-Not yet implemented:
+Future work:
 
-- Phase 4+ hooks, notifications, and branch-context integration
+- Phase 5+ advanced workflows are tracked in `future_work.md`
 
 ## Installation
 
@@ -103,6 +104,21 @@ oss-context query --reviewer bob --pending
 
 # Show tracked repository sync status
 oss-context query --repos
+
+# Resolve the current branch to its PR
+oss-context branch current-pr
+
+# Show branch-aware PR context for the current worktree
+oss-context branch context
+
+# Show file-level unresolved review context for the current branch PR
+oss-context branch file-context src/auth.py
+
+# Manually pin the current branch to a synced PR
+oss-context branch link --repo owner/repo --pr 42
+
+# Install warning-only git hooks for branch-aware review reminders
+oss-context install-hooks
 ```
 
 ## MCP server usage
@@ -178,5 +194,7 @@ uv sync --extra dev && uv run ruff check . && uv run pyright && uv run pytest
 - Decision extraction is cached per comment body hash to avoid repeat analysis cost.
 - `oss-context serve` starts the FastMCP server for IDE and agent integrations.
 - `oss-context ui` starts a local-only HTML dashboard backed by the same SQLite database.
+- `oss-context branch ...` bridges the current git worktree to synced PR review state.
+- `oss-context install-hooks` installs warning-only git hooks and refuses to overwrite unmanaged hooks.
 - Cross-repo dashboard queries are available directly from the CLI and MCP resources.
 - MCP search can find synced PRs and issues by free text or structured references like `owner/repo#123`.

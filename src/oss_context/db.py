@@ -130,6 +130,15 @@ CREATE TABLE IF NOT EXISTS llm_cache (
     analyzed_at TIMESTAMP NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS branch_links (
+    id INTEGER PRIMARY KEY,
+    repo_slug TEXT NOT NULL,
+    branch_name TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    linked_at TIMESTAMP NOT NULL,
+    UNIQUE(repo_slug, branch_name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_prs_repo_state ON prs(repo_id, state);
 CREATE INDEX IF NOT EXISTS idx_issues_repo_state ON issues(repo_id, state);
 CREATE INDEX IF NOT EXISTS idx_threads_pr_state ON review_threads(pr_id, thread_state);
@@ -137,6 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_comments_thread ON review_comments(thread_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_pr ON decision_log(pr_id);
 CREATE INDEX IF NOT EXISTS idx_pr_labels_label ON pr_labels(label);
 CREATE INDEX IF NOT EXISTS idx_issue_labels_label ON issue_labels(label);
+CREATE INDEX IF NOT EXISTS idx_branch_links_branch ON branch_links(branch_name);
 CREATE INDEX IF NOT EXISTS idx_refs_source ON extracted_references(source_kind, source_id);
 CREATE INDEX IF NOT EXISTS idx_refs_target ON extracted_references(
     target_repo, target_number, reference_kind
