@@ -1,8 +1,9 @@
 """Git hook installation helpers for oss-context.
 
-This module installs lightweight warning-only git hooks for Phase 4 workflows.
-The hooks do not block pushes or commits; they surface unresolved blocking PR
-review state for the current branch when oss-context is available.
+This module installs lightweight warning-only git hooks for branch-aware review
+workflows. The hooks do not block pushes or commits; they surface unresolved
+blocking PR review state for the current branch when oss-context is available
+without waiting on network-backed fallback resolution.
 """
 
 from __future__ import annotations
@@ -10,11 +11,12 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+HOOK_COMMAND_TIMEOUT_SECONDS = 5.0
 HOOK_MARKER = "# installed by oss-context"
 PRE_PUSH_SCRIPT = f"""#!/bin/sh
 {HOOK_MARKER}
 if command -v oss-context >/dev/null 2>&1; then
-  oss-context branch context --fail-on-blocking --quiet >/dev/null 2>&1
+  oss-context branch context --fail-on-blocking --quiet --no-gh-fallback >/dev/null 2>&1
   status=$?
   if [ "$status" -eq 10 ]; then
     printf '%s\n' 'oss-context: current branch PR still has blocking review threads.'
@@ -25,7 +27,7 @@ exit 0
 POST_COMMIT_SCRIPT = f"""#!/bin/sh
 {HOOK_MARKER}
 if command -v oss-context >/dev/null 2>&1; then
-  oss-context branch context --fail-on-blocking --quiet >/dev/null 2>&1
+  oss-context branch context --fail-on-blocking --quiet --no-gh-fallback >/dev/null 2>&1
   status=$?
   if [ "$status" -eq 10 ]; then
     printf '%s\n' 'oss-context: note: current branch PR still has blocking review threads.'
@@ -53,13 +55,19 @@ def _write_hook(path: Path, script: str) -> None:
 
 def install_git_hooks(repo_root: Path) -> list[Path]:
     """Install warning-only post-commit and pre-push hooks into a git repo."""
-    completed = subprocess.run(
-        ["git", "rev-parse", "--git-path", "hooks"],
-        cwd=str(repo_root),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--git-path", "hooks"],
+            cwd=str(repo_root),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=HOOK_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HookInstallError(
+            f"git hook path lookup timed out after {HOOK_COMMAND_TIMEOUT_SECONDS:.0f}s"
+        ) from exc
     if completed.returncode != 0:
         stderr = (
             completed.stderr.strip() or completed.stdout.strip() or "git hook path lookup failed"

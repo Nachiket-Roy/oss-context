@@ -3,7 +3,7 @@
 This module bridges the local git worktree to synced pull-request state. It can
 inspect the current repository and branch, resolve the associated PR from a
 manual link, the local SQLite graph, or the GitHub CLI, and assemble branch-
-aware PR and file-level context for Phase 4 workflows.
+aware PR and file-level context for local development workflows.
 """
 
 from __future__ import annotations
@@ -14,11 +14,13 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from oss_context.models import RepoRef
 from oss_context.queries import get_pr_context_payload, list_unresolved_threads
 
 CommandRunner = Callable[[list[str], Path | None, bool], str | None]
+COMMAND_TIMEOUT_SECONDS = 5.0
 
 
 class BranchContextError(RuntimeError):
@@ -31,13 +33,21 @@ def _run_command(
     allow_failure: bool = False,
 ) -> str | None:
     """Run a local command and return stdout, optionally tolerating failures."""
-    completed = subprocess.run(
-        args,
-        cwd=str(cwd) if cwd is not None else None,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=str(cwd) if cwd is not None else None,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if allow_failure:
+            return None
+        raise BranchContextError(
+            f"Command timed out after {COMMAND_TIMEOUT_SECONDS:.0f}s: {' '.join(args)}"
+        ) from exc
     if completed.returncode != 0:
         if allow_failure:
             return None
@@ -75,15 +85,24 @@ def parse_github_remote(url: str | None) -> str | None:
         return None
 
 
+def get_git_repo_root(
+    cwd: Path | None = None,
+    *,
+    runner: CommandRunner = _run_command,
+) -> Path:
+    """Resolve the git repository root for a working tree."""
+    repo_root_raw = runner(["git", "rev-parse", "--show-toplevel"], cwd, False)
+    assert repo_root_raw is not None
+    return Path(repo_root_raw)
+
+
 def get_git_worktree(
     cwd: Path | None = None,
     *,
     runner: CommandRunner = _run_command,
 ) -> dict[str, Any]:
     """Inspect the current git worktree for repo root, branch, and GitHub repo."""
-    repo_root_raw = runner(["git", "rev-parse", "--show-toplevel"], cwd, False)
-    assert repo_root_raw is not None
-    repo_root = Path(repo_root_raw)
+    repo_root = get_git_repo_root(cwd, runner=runner)
     branch = runner(["git", "branch", "--show-current"], repo_root, False)
     if not branch:
         raise BranchContextError("Could not determine the current git branch.")
@@ -160,18 +179,27 @@ def _find_pr_by_synced_branch(
         JOIN repos r ON r.id = p.repo_id
         WHERE r.owner = ? AND r.name = ? AND p.head_branch = ?
         ORDER BY CASE WHEN p.state = 'open' THEN 0 ELSE 1 END, p.updated_at DESC, p.id DESC
-        LIMIT 2
+        LIMIT 10
         """,
         (repo_ref.owner, repo_ref.name, branch_name),
     ).fetchall()
     if not rows:
         return None
-    if len(rows) > 1 and rows[0]["number"] != rows[1]["number"]:
+
+    open_rows = [row for row in rows if row["state"] == "open"]
+    if len(open_rows) == 1:
+        row = open_rows[0]
+    elif len(open_rows) > 1:
+        raise BranchContextError(
+            f"Multiple open PRs match branch {branch_name!r} in {repo}. Use branch link to pin one."
+        )
+    elif len(rows) == 1:
+        row = rows[0]
+    else:
         raise BranchContextError(
             f"Multiple synced PRs match branch {branch_name!r} in {repo}. "
             "Use branch link to pin one."
         )
-    row = rows[0]
     return {
         "repo": repo,
         "pr_number": row["number"],
@@ -181,10 +209,30 @@ def _find_pr_by_synced_branch(
     }
 
 
+def _parse_github_pr_url(url: str | None) -> tuple[str, int] | None:
+    """Parse a GitHub pull request URL into repo slug and PR number."""
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.netloc and parsed.netloc.lower() != "github.com":
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 4 or parts[2] != "pull":
+        return None
+    try:
+        repo = RepoRef.from_slug(f"{parts[0]}/{parts[1]}").slug
+        pr_number = int(parts[3])
+    except (ValueError, TypeError):
+        return None
+    return repo, pr_number
+
+
 def _find_pr_with_gh(
     *,
     repo_root: Path,
     runner: CommandRunner,
+    expected_repo: str | None,
+    expected_branch: str | None,
 ) -> dict[str, Any] | None:
     """Fallback to `gh pr view` when the local SQLite graph cannot resolve the branch."""
     output = runner(
@@ -205,22 +253,18 @@ def _find_pr_with_gh(
     except json.JSONDecodeError as exc:
         raise BranchContextError("gh returned invalid PR JSON.") from exc
 
-    repo = None
-    url = payload.get("url")
-    if isinstance(url, str):
-        repo = parse_github_remote(url.removeprefix("https://github.com/"))
-        if repo is None and "github.com/" in url:
-            repo = parse_github_remote(
-                url.split("github.com/", maxsplit=1)[1].split("/pull/", maxsplit=1)[0]
-            )
-    if repo is None:
+    parsed_url = _parse_github_pr_url(payload.get("url"))
+    if parsed_url is None:
         return None
-    number = payload.get("number")
-    if not isinstance(number, int):
+    repo, pr_number = parsed_url
+    if expected_repo is not None and repo != expected_repo:
+        return None
+    head_branch = payload.get("headRefName")
+    if expected_branch is not None and head_branch != expected_branch:
         return None
     return {
         "repo": repo,
-        "pr_number": number,
+        "pr_number": pr_number,
         "title": payload.get("title"),
         "state": payload.get("state"),
         "source": "gh_cli",
@@ -233,6 +277,7 @@ def resolve_branch_pr(
     cwd: Path | None = None,
     repo: str | None = None,
     branch_name: str | None = None,
+    allow_gh_fallback: bool = True,
     runner: CommandRunner = _run_command,
 ) -> dict[str, Any]:
     """Resolve the pull request associated with the current branch."""
@@ -261,7 +306,18 @@ def resolve_branch_pr(
                 **db_match,
             }
 
-    gh_match = _find_pr_with_gh(repo_root=worktree["repo_root"], runner=runner)
+    can_use_gh_fallback = allow_gh_fallback and (
+        branch_name is None and (repo is None or repo == worktree["repo"])
+    )
+    if can_use_gh_fallback:
+        gh_match = _find_pr_with_gh(
+            repo_root=worktree["repo_root"],
+            runner=runner,
+            expected_repo=resolved_repo,
+            expected_branch=resolved_branch,
+        )
+    else:
+        gh_match = None
     if gh_match is not None:
         return {
             "repo_root": worktree["repo_root"],
@@ -312,10 +368,16 @@ def link_branch_to_pr(
 def _normalize_file_for_repo(file_path: str, repo_root: Path) -> str:
     """Normalize an input path to a repo-relative POSIX-like path."""
     raw = Path(file_path)
-    if raw.is_absolute():
-        normalized = raw.resolve().relative_to(repo_root.resolve())
-    else:
-        normalized = raw
+    resolved_root = repo_root.resolve()
+    try:
+        if raw.is_absolute():
+            normalized = raw.resolve().relative_to(resolved_root)
+        else:
+            normalized = (resolved_root / raw).resolve().relative_to(resolved_root)
+    except ValueError as exc:
+        raise BranchContextError(
+            f"File path {file_path!r} is outside the repository root {repo_root}."
+        ) from exc
     return normalized.as_posix()
 
 
@@ -336,6 +398,7 @@ def get_branch_context_payload(
     cwd: Path | None = None,
     repo: str | None = None,
     branch_name: str | None = None,
+    allow_gh_fallback: bool = True,
     runner: CommandRunner = _run_command,
 ) -> dict[str, Any]:
     """Assemble branch-aware PR context for the current worktree."""
@@ -344,6 +407,7 @@ def get_branch_context_payload(
         cwd=cwd,
         repo=repo,
         branch_name=branch_name,
+        allow_gh_fallback=allow_gh_fallback,
         runner=runner,
     )
     pr_context = get_pr_context_payload(
@@ -368,6 +432,7 @@ def get_branch_file_context(
     cwd: Path | None = None,
     repo: str | None = None,
     branch_name: str | None = None,
+    allow_gh_fallback: bool = True,
     runner: CommandRunner = _run_command,
 ) -> dict[str, Any]:
     """Assemble file-scoped unresolved review context for the current branch PR."""
@@ -376,6 +441,7 @@ def get_branch_file_context(
         cwd=cwd,
         repo=repo,
         branch_name=branch_name,
+        allow_gh_fallback=allow_gh_fallback,
         runner=runner,
     )
     relative_path = _normalize_file_for_repo(file_path, Path(branch_context["repo_root"]))
@@ -385,7 +451,9 @@ def get_branch_file_context(
         if row["pr_number"] == branch_context["pr_number"]
     ]
     matching_threads = [
-        row for row in all_threads if _file_matches(row["file_path"], relative_path)
+        row
+        for row in all_threads
+        if row["file_path"] not in {None, "—"} and _file_matches(row["file_path"], relative_path)
     ]
     return {
         "repo": branch_context["repo"],

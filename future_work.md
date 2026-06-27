@@ -1,11 +1,11 @@
 <!-- Future roadmap notes for oss-context. -->
 # future_work.md
 
-## Phase 5: Advanced Features
+## Future Work
 
-Phase 5 is intentionally future work. The Phase 4 branch-context integration now
-bridges local development workflows to synced PR review state; the next phase
-focuses on proactive assistance, notifications, and broader collaboration.
+These items are intentionally deferred. The current branch-aware context work
+bridges local development workflows to synced PR review state; the next set of
+improvements focuses on proactive assistance, notifications, and broader collaboration.
 
 ### 5.1 Notification integration
 - Slack or Discord webhooks for stale unresolved threads

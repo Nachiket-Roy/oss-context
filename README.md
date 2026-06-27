@@ -2,7 +2,7 @@
 
 `oss-context` tracks pull request review decisions and reviewer state across GitHub PRs using a local SQLite knowledge graph.
 
-This repository now contains the Phase 0 through Phase 3 core foundation:
+This repository now contains the core foundation for local sync, review intelligence, IDE integration, and dashboard workflows:
 
 - GitHub sync into SQLite with incremental PR discovery
 - Review thread + comment persistence
@@ -16,15 +16,13 @@ This repository now contains the Phase 0 through Phase 3 core foundation:
 
 Implemented in this branch:
 
-- Phase 0: project scaffolding, schema, GitHub sync engine, CLI MVP
-- Phase 1: decision extraction, context assembly, health summaries, rich output
-- Phase 2: MCP server with tools and resources for PR context, issue context, and unresolved state
-- Phase 3: cross-repo queries, reviewer-status summaries, dashboard metrics, and a local HTML UI
-- Phase 4: branch-aware PR resolution, file-level context, and warning-only git hook installation
+- project scaffolding, schema, GitHub sync engine, and CLI basics
+- decision extraction, context assembly, health summaries, and rich output
+- MCP tools and resources for PR context, issue context, and unresolved state
+- cross-repo queries, reviewer-status summaries, dashboard metrics, and a local HTML UI
+- branch-aware PR resolution, file-level context, and warning-only git hook installation
 
-Future work:
-
-- Phase 5+ advanced workflows are tracked in `future_work.md`
+Future work is tracked in `future_work.md`
 
 ## Installation
 
@@ -67,7 +65,7 @@ pyright
 - `OSS_CONTEXT_LLM_API_KEY` - provider key override
 - `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` - provider-native fallbacks
 
-If no LLM provider is configured, `oss-context` falls back to a deterministic heuristic classifier so Phase 1 remains usable without secrets.
+If no LLM provider is configured, `oss-context` falls back to a deterministic heuristic classifier so review classification remains usable without secrets.
 
 ## CLI examples
 

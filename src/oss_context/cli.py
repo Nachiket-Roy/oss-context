@@ -2,7 +2,7 @@
 
 This module defines Typer commands for syncing GitHub data, querying the local
 SQLite knowledge graph for PR and issue context, serving the MCP endpoint,
-launching the local HTML UI, and driving Phase 4 branch-aware workflows.
+launching the local HTML UI, and driving branch-aware workflows.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from oss_context.branch_context import (
     BranchContextError,
     get_branch_context_payload,
     get_branch_file_context,
+    get_git_repo_root,
     get_git_worktree,
     link_branch_to_pr,
     resolve_branch_pr,
@@ -89,9 +90,7 @@ def _fail_branch_command(exc: Exception, *, quiet: bool = False) -> None:
 def sync(
     repo: str,
     db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
-    extract_decisions: bool = typer.Option(
-        True, help="Run Phase 1 decision extraction after sync."
-    ),
+    extract_decisions: bool = typer.Option(True, help="Run decision extraction after sync."),
     batch_size: int = typer.Option(10, min=1, help="Comments to analyze per LLM batch."),
 ) -> None:
     """Sync a GitHub repository into the local database."""
@@ -288,6 +287,10 @@ def context(
     repo: str | None = typer.Option(None, help="Override the detected GitHub repo."),
     branch: str | None = typer.Option(None, help="Override the current branch name."),
     cwd: Path | None = typer.Option(None, help="Git working tree to inspect."),
+    no_gh_fallback: bool = typer.Option(
+        False,
+        help="Skip GitHub CLI fallback and resolve only from local metadata and synced state.",
+    ),
     fail_on_blocking: bool = typer.Option(
         False,
         help="Exit with code 10 when the resolved PR still has blocking threads.",
@@ -305,6 +308,7 @@ def context(
             cwd=cwd,
             repo=normalized_repo,
             branch_name=branch,
+            allow_gh_fallback=not no_gh_fallback,
         )
         if not quiet:
             console.print(render_branch_context(payload))
@@ -323,6 +327,10 @@ def branch_file_context(
     repo: str | None = typer.Option(None, help="Override the detected GitHub repo."),
     branch: str | None = typer.Option(None, help="Override the current branch name."),
     cwd: Path | None = typer.Option(None, help="Git working tree to inspect."),
+    no_gh_fallback: bool = typer.Option(
+        False,
+        help="Skip GitHub CLI fallback and resolve only from local metadata and synced state.",
+    ),
     db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
 ) -> None:
     """Show unresolved review context for a file on the current branch PR."""
@@ -336,6 +344,7 @@ def branch_file_context(
             cwd=cwd,
             repo=normalized_repo,
             branch_name=branch,
+            allow_gh_fallback=not no_gh_fallback,
         )
         console.print(render_branch_file_context(payload))
     except (BranchContextError, ValueError) as exc:
@@ -393,8 +402,8 @@ def install_hooks(
 ) -> None:
     """Install warning-only git hooks for branch-aware review reminders."""
     try:
-        worktree = get_git_worktree(cwd)
-        installed = install_git_hooks(worktree["repo_root"])
+        repo_root = get_git_repo_root(cwd)
+        installed = install_git_hooks(repo_root)
     except (BranchContextError, HookInstallError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
