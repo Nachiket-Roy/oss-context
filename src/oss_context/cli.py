@@ -1,8 +1,8 @@
 """Command-line interface for oss-context.
 
 This module defines Typer commands for syncing GitHub data, querying the local
-SQLite knowledge graph for PR and issue context, serving the MCP endpoint, and
-launching the local HTML UI.
+SQLite knowledge graph for PR and issue context, serving the MCP endpoint,
+launching the local HTML UI, and driving branch-aware workflows.
 """
 
 from __future__ import annotations
@@ -13,10 +13,23 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
+from oss_context.branch_context import (
+    BranchContextError,
+    get_branch_context_payload,
+    get_branch_file_context,
+    get_git_repo_root,
+    get_git_worktree,
+    link_branch_to_pr,
+    resolve_branch_pr,
+)
 from oss_context.db import DatabaseManager
 from oss_context.formatting import (
+    render_branch_context,
+    render_branch_file_context,
+    render_branch_resolution,
     render_dashboard,
     render_decisions,
+    render_hook_installation,
     render_issue_context,
     render_pr_context,
     render_pr_health,
@@ -25,6 +38,7 @@ from oss_context.formatting import (
     render_tracked_repos,
     render_unresolved_threads,
 )
+from oss_context.hooks import HookInstallError, install_git_hooks
 from oss_context.mcp_server import run_mcp_server
 from oss_context.models import RepoRef
 from oss_context.queries import (
@@ -42,6 +56,8 @@ from oss_context.sync import sync_repository
 from oss_context.web_ui import serve_web_ui
 
 app = typer.Typer(help="Track GitHub PR and issue context in a local SQLite knowledge graph.")
+branch_app = typer.Typer(help="Resolve the current git branch to pull-request context.")
+app.add_typer(branch_app, name="branch")
 console = Console()
 
 
@@ -63,13 +79,18 @@ def _load_cli_settings(db_path: Path | None):
         raise typer.BadParameter(str(exc)) from exc
 
 
+def _fail_branch_command(exc: Exception, *, quiet: bool = False) -> None:
+    """Exit a branch workflow command with a concise, user-facing error."""
+    if not quiet:
+        console.print(f"[red]{exc}[/red]")
+    raise typer.Exit(code=1) from exc
+
+
 @app.command()
 def sync(
     repo: str,
     db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
-    extract_decisions: bool = typer.Option(
-        True, help="Run Phase 1 decision extraction after sync."
-    ),
+    extract_decisions: bool = typer.Option(True, help="Run decision extraction after sync."),
     batch_size: int = typer.Option(10, min=1, help="Comments to analyze per LLM batch."),
 ) -> None:
     """Sync a GitHub repository into the local database."""
@@ -239,6 +260,154 @@ def query(
             console.print(render_unresolved_threads(rows))
     finally:
         connection.close()
+
+
+@branch_app.command("current-pr")
+def branch_current_pr(
+    repo: str | None = typer.Option(None, help="Override the detected GitHub repo."),
+    branch: str | None = typer.Option(None, help="Override the current branch name."),
+    cwd: Path | None = typer.Option(None, help="Git working tree to inspect."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Resolve the current branch to its pull request."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        payload = resolve_branch_pr(connection, cwd=cwd, repo=normalized_repo, branch_name=branch)
+        console.print(render_branch_resolution(payload))
+    except BranchContextError as exc:
+        _fail_branch_command(exc)
+    finally:
+        connection.close()
+
+
+@branch_app.command()
+def context(
+    repo: str | None = typer.Option(None, help="Override the detected GitHub repo."),
+    branch: str | None = typer.Option(None, help="Override the current branch name."),
+    cwd: Path | None = typer.Option(None, help="Git working tree to inspect."),
+    no_gh_fallback: bool = typer.Option(
+        False,
+        help="Skip GitHub CLI fallback and resolve only from local metadata and synced state.",
+    ),
+    fail_on_blocking: bool = typer.Option(
+        False,
+        help="Exit with code 10 when the resolved PR still has blocking threads.",
+    ),
+    quiet: bool = typer.Option(False, help="Suppress normal output and use exit codes only."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Show the branch-aware PR context for the current worktree."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        payload = get_branch_context_payload(
+            connection,
+            cwd=cwd,
+            repo=normalized_repo,
+            branch_name=branch,
+            allow_gh_fallback=not no_gh_fallback,
+        )
+        if not quiet:
+            console.print(render_branch_context(payload))
+        blocking_threads = payload["pr_context"]["health"]["blocking_threads"]
+        if fail_on_blocking and blocking_threads > 0:
+            raise typer.Exit(code=10)
+    except BranchContextError as exc:
+        _fail_branch_command(exc, quiet=quiet)
+    finally:
+        connection.close()
+
+
+@branch_app.command("file-context")
+def branch_file_context(
+    file_path: str = typer.Argument(..., help="File path to inspect within the current repo."),
+    repo: str | None = typer.Option(None, help="Override the detected GitHub repo."),
+    branch: str | None = typer.Option(None, help="Override the current branch name."),
+    cwd: Path | None = typer.Option(None, help="Git working tree to inspect."),
+    no_gh_fallback: bool = typer.Option(
+        False,
+        help="Skip GitHub CLI fallback and resolve only from local metadata and synced state.",
+    ),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Show unresolved review context for a file on the current branch PR."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        payload = get_branch_file_context(
+            connection,
+            file_path=file_path,
+            cwd=cwd,
+            repo=normalized_repo,
+            branch_name=branch,
+            allow_gh_fallback=not no_gh_fallback,
+        )
+        console.print(render_branch_file_context(payload))
+    except (BranchContextError, ValueError) as exc:
+        _fail_branch_command(exc)
+    finally:
+        connection.close()
+
+
+@branch_app.command()
+def link(
+    pr: int = typer.Option(..., help="Pull request number to associate with the branch."),
+    repo: str | None = typer.Option(None, help="Override the detected GitHub repo."),
+    branch: str | None = typer.Option(None, help="Override the current branch name."),
+    cwd: Path | None = typer.Option(None, help="Git working tree to inspect."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Manually link the current branch to a synced PR."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        worktree = get_git_worktree(cwd)
+        resolved_repo = normalized_repo or worktree["repo"]
+        resolved_branch = branch or worktree["branch"]
+        if resolved_repo is None:
+            raise BranchContextError(
+                "Could not determine the GitHub repo. Pass --repo in owner/name form."
+            )
+        link_branch_to_pr(
+            connection,
+            repo=resolved_repo,
+            branch_name=resolved_branch,
+            pr_number=pr,
+        )
+        console.print(
+            render_branch_resolution(
+                {
+                    "repo": resolved_repo,
+                    "branch": resolved_branch,
+                    "pr_number": pr,
+                    "source": "manual_link",
+                    "repo_root": str(worktree["repo_root"]),
+                }
+            )
+        )
+    except BranchContextError as exc:
+        _fail_branch_command(exc)
+    finally:
+        connection.close()
+
+
+@app.command("install-hooks")
+def install_hooks(
+    cwd: Path | None = typer.Option(None, help="Git working tree to install hooks into."),
+) -> None:
+    """Install warning-only git hooks for branch-aware review reminders."""
+    try:
+        repo_root = get_git_repo_root(cwd)
+        installed = install_git_hooks(repo_root)
+    except (BranchContextError, HookInstallError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(render_hook_installation([str(path) for path in installed]))
 
 
 @app.command()
