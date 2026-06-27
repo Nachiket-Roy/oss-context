@@ -215,43 +215,45 @@ async def sync_repository(
     database = DatabaseManager(settings.db_path)
     connection = database.initialize()
 
-    async with GitHubClient(settings) as client:
-        repo_payload = await client.get_repo(repo)
-        repo_id, last_synced_at = _upsert_repo(
-            connection,
-            repo,
-            github_id=repo_payload["id"],
-            default_branch=repo_payload.get("default_branch"),
-        )
-
-        async for pull_request in client.iter_pull_requests(repo, since=last_synced_at):
-            pr_id = _upsert_pr(connection, repo_id, pull_request)
-            report.prs_synced += 1
-
-            threads = await client.fetch_review_threads(repo, pull_request.number)
-            for thread in threads:
-                thread_id = _upsert_thread(connection, pr_id, thread)
-                report.threads_synced += 1
-                for comment in thread.comments:
-                    _upsert_comment(connection, thread_id, comment)
-                    report.comments_synced += 1
-
-            connection.commit()
-
-        connection.execute(
-            "UPDATE repos SET last_synced_at = ? WHERE id = ?",
-            (_iso(report.started_at), repo_id),
-        )
-        connection.commit()
-
-        if extract_decisions:
-            report.decisions_extracted = await analyze_pending_comments(
+    try:
+        async with GitHubClient(settings) as client:
+            repo_payload = await client.get_repo(repo)
+            repo_id, last_synced_at = _upsert_repo(
                 connection,
-                settings,
-                repo_id=repo_id,
-                batch_size=batch_size,
+                repo,
+                github_id=repo_payload["id"],
+                default_branch=repo_payload.get("default_branch"),
             )
 
-    report.finished_at = datetime.now(UTC)
-    connection.close()
-    return report
+            async for pull_request in client.iter_pull_requests(repo, since=last_synced_at):
+                pr_id = _upsert_pr(connection, repo_id, pull_request)
+                report.prs_synced += 1
+
+                threads = await client.fetch_review_threads(repo, pull_request.number)
+                for thread in threads:
+                    thread_id = _upsert_thread(connection, pr_id, thread)
+                    report.threads_synced += 1
+                    for comment in thread.comments:
+                        _upsert_comment(connection, thread_id, comment)
+                        report.comments_synced += 1
+
+                connection.commit()
+
+            connection.execute(
+                "UPDATE repos SET last_synced_at = ? WHERE id = ?",
+                (_iso(report.started_at), repo_id),
+            )
+            connection.commit()
+
+            if extract_decisions:
+                report.decisions_extracted = await analyze_pending_comments(
+                    connection,
+                    settings,
+                    repo_id=repo_id,
+                    batch_size=batch_size,
+                )
+
+        report.finished_at = datetime.now(UTC)
+        return report
+    finally:
+        connection.close()
