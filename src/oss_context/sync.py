@@ -1,8 +1,9 @@
 """Repository sync pipeline for oss-context.
 
-This module pulls GitHub pull-request data into SQLite, upserts repository
-state, persists review threads and comments, and optionally triggers decision
-extraction after the sync completes.
+This module pulls GitHub pull-request and issue data into SQLite, upserts
+repository state, persists review threads and comments, extracts structured
+references from bodies and comments, and optionally triggers decision extraction
+after the sync completes.
 """
 
 from __future__ import annotations
@@ -14,12 +15,14 @@ from oss_context.db import DatabaseManager
 from oss_context.github import GitHubClient
 from oss_context.intelligence import analyze_pending_comments
 from oss_context.models import (
+    IssueData,
     PullRequestData,
     RepoRef,
     ReviewCommentData,
     ReviewThreadData,
     SyncReport,
 )
+from oss_context.references import extract_references
 from oss_context.settings import Settings
 
 
@@ -30,7 +33,10 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def _upsert_repo(
-    connection: sqlite3.Connection, repo: RepoRef, github_id: int, default_branch: str | None
+    connection: sqlite3.Connection,
+    repo: RepoRef,
+    github_id: int,
+    default_branch: str | None,
 ) -> tuple[int, datetime | None]:
     row = connection.execute(
         "SELECT id, last_synced_at FROM repos WHERE owner = ? AND name = ?",
@@ -58,6 +64,49 @@ def _upsert_repo(
     if cursor.lastrowid is None:
         raise RuntimeError("Failed to insert repo row")
     return cursor.lastrowid, None
+
+
+def _replace_references(
+    connection: sqlite3.Connection,
+    *,
+    repo_id: int,
+    repo_slug: str,
+    source_kind: str,
+    source_id: int,
+    text: str | None,
+) -> int:
+    connection.execute(
+        "DELETE FROM extracted_references WHERE source_kind = ? AND source_id = ?",
+        (source_kind, source_id),
+    )
+
+    references = extract_references(text, repo=repo_slug)
+    if not references:
+        return 0
+
+    connection.executemany(
+        """
+        INSERT INTO extracted_references(
+            source_kind, source_id, repo_id, reference_kind, raw_text, url,
+            target_repo, target_number, target_sha
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                source_kind,
+                source_id,
+                repo_id,
+                reference.kind,
+                reference.raw_text,
+                reference.url,
+                reference.target_repo,
+                reference.target_number,
+                reference.target_sha,
+            )
+            for reference in references
+        ],
+    )
+    return len(references)
 
 
 def _upsert_pr(connection: sqlite3.Connection, repo_id: int, pr: PullRequestData) -> int:
@@ -114,6 +163,58 @@ def _upsert_pr(connection: sqlite3.Connection, repo_id: int, pr: PullRequestData
     return pr_id
 
 
+def _upsert_issue(connection: sqlite3.Connection, repo_id: int, issue: IssueData) -> int:
+    row = connection.execute(
+        "SELECT id FROM issues WHERE repo_id = ? AND number = ?",
+        (repo_id, issue.number),
+    ).fetchone()
+    payload = (
+        issue.github_id,
+        issue.title,
+        issue.state,
+        issue.author,
+        _iso(issue.created_at),
+        _iso(issue.updated_at),
+        _iso(issue.closed_at),
+        issue.body,
+        repo_id,
+        issue.number,
+    )
+
+    if row:
+        connection.execute(
+            """
+            UPDATE issues
+            SET github_id = ?, title = ?, state = ?, author = ?, created_at = ?, updated_at = ?,
+                closed_at = ?, body = ?
+            WHERE repo_id = ? AND number = ?
+            """,
+            payload,
+        )
+        issue_id = row["id"]
+    else:
+        cursor = connection.execute(
+            """
+            INSERT INTO issues(
+                github_id, title, state, author, created_at, updated_at,
+                closed_at, body, repo_id, number
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            payload,
+        )
+        if cursor.lastrowid is None:
+            raise RuntimeError("Failed to insert issue row")
+        issue_id = cursor.lastrowid
+
+    connection.execute("DELETE FROM issue_labels WHERE issue_id = ?", (issue_id,))
+    connection.executemany(
+        "INSERT INTO issue_labels(issue_id, label, added_at) VALUES(?, ?, ?)",
+        [(issue_id, label, _iso(datetime.now(UTC))) for label in issue.labels],
+    )
+    return issue_id
+
+
 def _upsert_thread(connection: sqlite3.Connection, pr_id: int, thread: ReviewThreadData) -> int:
     row = connection.execute(
         "SELECT id FROM review_threads WHERE github_thread_id = ?",
@@ -158,7 +259,9 @@ def _upsert_thread(connection: sqlite3.Connection, pr_id: int, thread: ReviewThr
 
 
 def _upsert_comment(
-    connection: sqlite3.Connection, thread_id: int, comment: ReviewCommentData
+    connection: sqlite3.Connection,
+    thread_id: int,
+    comment: ReviewCommentData,
 ) -> int:
     existing = connection.execute(
         "SELECT id, body FROM review_comments WHERE github_comment_id = ?",
@@ -235,15 +338,44 @@ async def sync_repository(
             async for pull_request in client.iter_pull_requests(repo, since=last_synced_at):
                 pr_id = _upsert_pr(connection, repo_id, pull_request)
                 report.prs_synced += 1
+                report.references_extracted += _replace_references(
+                    connection,
+                    repo_id=repo_id,
+                    repo_slug=repo.slug,
+                    source_kind="pr",
+                    source_id=pr_id,
+                    text=pull_request.body,
+                )
 
                 threads = await client.fetch_review_threads(repo, pull_request.number)
                 for thread in threads:
                     thread_id = _upsert_thread(connection, pr_id, thread)
                     report.threads_synced += 1
                     for comment in thread.comments:
-                        _upsert_comment(connection, thread_id, comment)
+                        comment_id = _upsert_comment(connection, thread_id, comment)
                         report.comments_synced += 1
+                        report.references_extracted += _replace_references(
+                            connection,
+                            repo_id=repo_id,
+                            repo_slug=repo.slug,
+                            source_kind="comment",
+                            source_id=comment_id,
+                            text=comment.body,
+                        )
 
+                connection.commit()
+
+            async for issue in client.iter_issues(repo, since=last_synced_at):
+                issue_id = _upsert_issue(connection, repo_id, issue)
+                report.issues_synced += 1
+                report.references_extracted += _replace_references(
+                    connection,
+                    repo_id=repo_id,
+                    repo_slug=repo.slug,
+                    source_kind="issue",
+                    source_id=issue_id,
+                    text=issue.body,
+                )
                 connection.commit()
 
             connection.execute(
