@@ -18,12 +18,11 @@ Implemented in this branch:
 
 - Phase 0: project scaffolding, schema, GitHub sync engine, CLI MVP
 - Phase 1: decision extraction, context assembly, health summaries, rich output
-- Phase 2: MCP server with tools and resources for PR context and unresolved state
-- Phase 3: cross-repo queries, reviewer-status summaries, and dashboard metrics
+- Phase 2: MCP server with tools and resources for PR context, issue context, and unresolved state
+- Phase 3: cross-repo queries, reviewer-status summaries, dashboard metrics, and a local HTML UI
 
 Not yet implemented:
 
-- Optional Phase 3 web dashboard
 - Phase 4+ hooks, notifications, and branch-context integration
 
 ## Installation
@@ -84,8 +83,17 @@ oss-context query --repo owner/repo --unresolved
 # Show extracted decisions for a specific PR
 oss-context query --repo owner/repo --pr 42 --decisions
 
-# Show PR health and reviewer state
+# Show full PR context, including linked references
+oss-context query --repo owner/repo --pr 42 --context
+
+# Show issue context even when the issue was never mentioned in review comments
+oss-context query --repo owner/repo --issue 44
+
+# Show PR health
 oss-context query --repo owner/repo --pr 42 --health
+
+# Show reviewer status explicitly
+oss-context query --reviewer bob --reviewer-status
 
 # Show a cross-repo dashboard
 oss-context query --dashboard
@@ -111,17 +119,34 @@ Run it over HTTP instead:
 uv run oss-context serve --transport http --host 127.0.0.1 --port 8765
 ```
 
+Run the local HTML UI instead of the MCP server:
+
+```bash
+uv run oss-context ui --host 127.0.0.1 --port 8080
+```
+
+Useful UI routes:
+
+- `/` — dashboard
+- `/repo/{owner}/{name}` — repo overview
+- `/repo/{owner}/{name}/issues` — repo issue list
+- `/pr/{owner}/{name}/{number}` — PR detail
+- `/issue/{owner}/{name}/{number}` — issue detail
+
 Exposed MCP tools include:
 
 - `sync_repo`
 - `get_pr_context`
+- `get_issue_context`
 - `get_unresolved_threads`
 - `get_reviewer_state`
 - `get_dashboard`
+- `search_work`
 
 Exposed MCP resources include:
 
 - `pr://{owner}/{name}/{pr_number}/context`
+- `issue://{owner}/{name}/{issue_number}/context`
 - `pr://{owner}/{name}/unresolved`
 - `pr://{owner}/{name}/freshness`
 - `pr://dashboard/overview`
@@ -148,6 +173,10 @@ uv sync --extra dev && uv run ruff check . && uv run pyright && uv run pytest
 
 - The SQLite database runs in WAL mode so sync and query operations can safely overlap.
 - Review thread state comes from GitHub review threads via GraphQL.
+- Repository sync now includes GitHub issues, so issues can be queried directly by number.
+- Structured references are extracted from PR bodies, issue bodies, and review comments.
 - Decision extraction is cached per comment body hash to avoid repeat analysis cost.
-- `oss-context serve` now starts the FastMCP server for IDE and agent integrations.
+- `oss-context serve` starts the FastMCP server for IDE and agent integrations.
+- `oss-context ui` starts a local-only HTML dashboard backed by the same SQLite database.
 - Cross-repo dashboard queries are available directly from the CLI and MCP resources.
+- MCP search can find synced PRs and issues by free text or structured references like `owner/repo#123`.

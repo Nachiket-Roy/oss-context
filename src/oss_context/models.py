@@ -1,8 +1,8 @@
 """Shared Pydantic models and domain types for oss-context.
 
-This module defines repository references, pull-request review entities,
-decision extraction results, sync reports, and health-summary structures shared
-across the rest of the codebase.
+This module defines repository references, pull-request review entities, issue
+entities, extracted references, decision extraction results, sync reports, and
+health-summary structures shared across the rest of the codebase.
 """
 
 from __future__ import annotations
@@ -19,6 +19,16 @@ DecisionType = Literal[
     "SUGGESTION",
     "ACKNOWLEDGMENT",
 ]
+
+ReferenceKind = Literal[
+    "pull_request",
+    "issue",
+    "issue_or_pr",
+    "commit",
+    "url",
+]
+
+SourceKind = Literal["pr", "comment", "issue"]
 
 
 class RepoRef(BaseModel):
@@ -75,6 +85,28 @@ class PullRequestData(BaseModel):
     labels: list[str] = Field(default_factory=list)
 
 
+class IssueData(BaseModel):
+    github_id: int
+    number: int
+    title: str
+    state: str
+    author: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    closed_at: datetime | None = None
+    body: str | None = None
+    labels: list[str] = Field(default_factory=list)
+
+
+class ExtractedReference(BaseModel):
+    kind: ReferenceKind
+    raw_text: str
+    url: str | None = None
+    target_repo: str | None = None
+    target_number: int | None = None
+    target_sha: str | None = None
+
+
 class DecisionExtraction(BaseModel):
     decision_type: DecisionType
     summary: str
@@ -94,9 +126,11 @@ class CommentForAnalysis(BaseModel):
 class SyncReport(BaseModel):
     repo: str
     prs_synced: int = 0
+    issues_synced: int = 0
     threads_synced: int = 0
     comments_synced: int = 0
     decisions_extracted: int = 0
+    references_extracted: int = 0
     started_at: datetime
     finished_at: datetime | None = None
 

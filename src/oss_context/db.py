@@ -1,8 +1,8 @@
 """SQLite schema and connection helpers for oss-context.
 
 This module owns database initialization, schema creation, and connection
-settings such as WAL mode so sync and query operations share the same storage
-behavior.
+settings such as WAL mode so sync, issue lookup, reference extraction, and
+query operations share the same storage behavior.
 """
 
 from __future__ import annotations
@@ -35,6 +35,21 @@ CREATE TABLE IF NOT EXISTS prs (
     base_branch TEXT,
     head_branch TEXT,
     merge_commit_sha TEXT,
+    UNIQUE(repo_id, number)
+);
+
+CREATE TABLE IF NOT EXISTS issues (
+    id INTEGER PRIMARY KEY,
+    github_id INTEGER UNIQUE,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    number INTEGER NOT NULL,
+    title TEXT,
+    state TEXT,
+    author TEXT,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    closed_at TIMESTAMP,
+    body TEXT,
     UNIQUE(repo_id, number)
 );
 
@@ -84,6 +99,26 @@ CREATE TABLE IF NOT EXISTS pr_labels (
     PRIMARY KEY(pr_id, label)
 );
 
+CREATE TABLE IF NOT EXISTS issue_labels (
+    issue_id INTEGER NOT NULL REFERENCES issues(id),
+    label TEXT NOT NULL,
+    added_at TIMESTAMP,
+    PRIMARY KEY(issue_id, label)
+);
+
+CREATE TABLE IF NOT EXISTS extracted_references (
+    id INTEGER PRIMARY KEY,
+    source_kind TEXT NOT NULL,
+    source_id INTEGER NOT NULL,
+    repo_id INTEGER REFERENCES repos(id),
+    reference_kind TEXT NOT NULL,
+    raw_text TEXT NOT NULL,
+    url TEXT,
+    target_repo TEXT,
+    target_number INTEGER,
+    target_sha TEXT
+);
+
 CREATE TABLE IF NOT EXISTS llm_cache (
     comment_id INTEGER PRIMARY KEY REFERENCES review_comments(id),
     provider TEXT NOT NULL,
@@ -96,10 +131,16 @@ CREATE TABLE IF NOT EXISTS llm_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_prs_repo_state ON prs(repo_id, state);
+CREATE INDEX IF NOT EXISTS idx_issues_repo_state ON issues(repo_id, state);
 CREATE INDEX IF NOT EXISTS idx_threads_pr_state ON review_threads(pr_id, thread_state);
 CREATE INDEX IF NOT EXISTS idx_comments_thread ON review_comments(thread_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_pr ON decision_log(pr_id);
 CREATE INDEX IF NOT EXISTS idx_pr_labels_label ON pr_labels(label);
+CREATE INDEX IF NOT EXISTS idx_issue_labels_label ON issue_labels(label);
+CREATE INDEX IF NOT EXISTS idx_refs_source ON extracted_references(source_kind, source_id);
+CREATE INDEX IF NOT EXISTS idx_refs_target ON extracted_references(
+    target_repo, target_number, reference_kind
+);
 """
 
 

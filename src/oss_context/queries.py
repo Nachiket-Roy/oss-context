@@ -1,19 +1,20 @@
-"""SQLite query helpers for unresolved state and PR summaries.
+"""SQLite query helpers for unresolved state, issues, references, and dashboards.
 
-This module assembles the higher-level read views used by the CLI, including
-unresolved review threads, decision timelines, reviewer status, repository
-freshness, and cross-repo dashboard summaries derived from the synced local
-knowledge graph.
+This module assembles the higher-level read views used by the CLI, MCP server,
+and local HTML UI, including unresolved review threads, decision timelines,
+linked references, issue context, reviewer status, repository freshness, and
+cross-repo dashboard summaries derived from the synced local knowledge graph.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
 from oss_context.models import PRHealthSummary, RepoRef
+from oss_context.references import extract_references
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -194,9 +195,11 @@ def list_tracked_repos(
                 WHEN t.thread_state = 'active' AND latest_cache.decision_type = 'REQUEST_CHANGES'
                 THEN t.id
             END
-        ) AS blocking_threads
+        ) AS blocking_threads,
+        COUNT(DISTINCT CASE WHEN i.state = 'open' THEN i.id END) AS open_issues
     FROM repos r
     LEFT JOIN prs p ON p.repo_id = r.id
+    LEFT JOIN issues i ON i.repo_id = r.id
     LEFT JOIN review_threads t ON t.pr_id = p.id
     LEFT JOIN llm_cache latest_cache ON latest_cache.comment_id = (
         SELECT rc.id
@@ -221,11 +224,296 @@ def list_tracked_repos(
             "default_branch": row["default_branch"],
             "last_synced_at": row["last_synced_at"],
             "open_prs": int(row["open_prs"] or 0),
+            "open_issues": int(row["open_issues"] or 0),
             "unresolved_threads": int(row["unresolved_threads"] or 0),
             "blocking_threads": int(row["blocking_threads"] or 0),
         }
         for row in rows
     ]
+
+
+def _parse_reference_filter(reference: str, repo: str | None = None) -> dict[str, Any]:
+    """Normalize a structured reference search input for SQLite queries."""
+    fallback_repo = repo or "placeholder/placeholder"
+    references = extract_references(reference, repo=fallback_repo)
+    if not references:
+        raise ValueError("Reference must be a GitHub URL, owner/repo#123, issue 44, or #123.")
+
+    parsed = references[0]
+    if repo is None and parsed.target_repo == fallback_repo and parsed.target_number is not None:
+        raise ValueError(
+            "Repository is required when using shorthand references like #123 or issue 44."
+        )
+
+    return {
+        "kind": parsed.kind,
+        "url": parsed.url,
+        "target_repo": parsed.target_repo,
+        "target_number": parsed.target_number,
+        "target_sha": parsed.target_sha,
+        "raw_text": parsed.raw_text,
+    }
+
+
+def list_repo_issues(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+    state: str | None = None,
+    label: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """List issues for a repository with optional state and label filters."""
+    repo_ref = RepoRef.from_slug(repo)
+    normalized_limit = max(1, limit)
+    query = """
+    SELECT
+        i.number,
+        i.title,
+        i.state,
+        i.author,
+        i.updated_at,
+        i.body,
+        GROUP_CONCAT(DISTINCT l.label) AS labels
+    FROM issues i
+    JOIN repos r ON r.id = i.repo_id
+    LEFT JOIN issue_labels l ON l.issue_id = i.id
+    WHERE r.owner = ? AND r.name = ?
+    """
+    params: list[object] = [repo_ref.owner, repo_ref.name]
+    if state:
+        query += " AND i.state = ?"
+        params.append(state)
+    if label:
+        query += (
+            " AND EXISTS (SELECT 1 FROM issue_labels il WHERE il.issue_id = i.id AND il.label = ?)"
+        )
+        params.append(label)
+    query += " GROUP BY i.id ORDER BY i.updated_at DESC, i.number DESC LIMIT ?"
+    params.append(normalized_limit)
+
+    rows = connection.execute(query, params).fetchall()
+    return [
+        {
+            "repo": repo,
+            "issue_number": row["number"],
+            "title": row["title"],
+            "state": row["state"],
+            "author": row["author"] or "unknown",
+            "updated_at": row["updated_at"],
+            "summary": _short_text(row["body"]),
+            "labels": sorted((row["labels"] or "").split(",")) if row["labels"] else [],
+        }
+        for row in rows
+    ]
+
+
+def _reference_exists_clause(
+    reference: dict[str, Any], *, source_sql: str
+) -> tuple[str, list[object]]:
+    """Build a source-scoped EXISTS clause for extracted references."""
+    if reference["url"]:
+        return (
+            f"EXISTS (SELECT 1 FROM extracted_references er WHERE {source_sql} AND er.url = ?)",
+            [reference["url"]],
+        )
+    if reference["target_repo"] and reference["target_number"] is not None:
+        return (
+            f"EXISTS (SELECT 1 FROM extracted_references er WHERE {source_sql} "
+            "AND er.target_repo = ? AND er.target_number = ?)",
+            [reference["target_repo"], reference["target_number"]],
+        )
+    if reference["target_repo"] and reference["target_sha"]:
+        return (
+            f"EXISTS (SELECT 1 FROM extracted_references er WHERE {source_sql} "
+            "AND er.target_repo = ? AND er.target_sha = ?)",
+            [reference["target_repo"], reference["target_sha"]],
+        )
+    return (
+        f"EXISTS (SELECT 1 FROM extracted_references er WHERE {source_sql} AND er.raw_text = ?)",
+        [reference["raw_text"]],
+    )
+
+
+def search_pull_requests(
+    connection: sqlite3.Connection,
+    *,
+    repo: str | None = None,
+    text: str | None = None,
+    reference: str | None = None,
+    state: str | None = None,
+    limit: int = 25,
+) -> list[dict[str, Any]]:
+    """Search synced pull requests by free text and/or structured references."""
+    normalized_limit = max(1, limit)
+    query = """
+    SELECT
+        r.owner || '/' || r.name AS repo,
+        p.number,
+        p.title,
+        p.state,
+        p.author,
+        p.updated_at,
+        GROUP_CONCAT(DISTINCT l.label) AS labels
+    FROM prs p
+    JOIN repos r ON r.id = p.repo_id
+    LEFT JOIN pr_labels l ON l.pr_id = p.id
+    WHERE 1 = 1
+    """
+    params: list[object] = []
+
+    if repo:
+        repo_ref = RepoRef.from_slug(repo)
+        query += " AND r.owner = ? AND r.name = ?"
+        params.extend([repo_ref.owner, repo_ref.name])
+    if state:
+        query += " AND p.state = ?"
+        params.append(state)
+    if text:
+        text_like = f"%{text.lower()}%"
+        query += """
+        AND (
+            LOWER(COALESCE(p.title, '')) LIKE ?
+            OR LOWER(COALESCE(p.body, '')) LIKE ?
+            OR EXISTS (
+                SELECT 1
+                FROM review_comments c
+                JOIN review_threads t ON t.id = c.thread_id
+                WHERE t.pr_id = p.id AND LOWER(COALESCE(c.body, '')) LIKE ?
+            )
+        )
+        """
+        params.extend([text_like, text_like, text_like])
+    if reference:
+        parsed_reference = _parse_reference_filter(reference, repo=repo)
+        clause, clause_params = _reference_exists_clause(
+            parsed_reference,
+            source_sql=(
+                "((er.source_kind = 'pr' AND er.source_id = p.id) OR "
+                "(er.source_kind = 'comment' AND er.source_id IN ("
+                "SELECT c2.id FROM review_comments c2 "
+                "JOIN review_threads t2 ON t2.id = c2.thread_id WHERE t2.pr_id = p.id"
+                ")))"
+            ),
+        )
+        query += f" AND {clause}"
+        params.extend(clause_params)
+
+    query += " GROUP BY p.id ORDER BY p.updated_at DESC, p.number DESC LIMIT ?"
+    params.append(normalized_limit)
+    rows = connection.execute(query, params).fetchall()
+    return [
+        {
+            "repo": row["repo"],
+            "number": row["number"],
+            "title": row["title"],
+            "state": row["state"],
+            "author": row["author"] or "unknown",
+            "updated_at": row["updated_at"],
+            "labels": sorted((row["labels"] or "").split(",")) if row["labels"] else [],
+        }
+        for row in rows
+    ]
+
+
+def search_issues(
+    connection: sqlite3.Connection,
+    *,
+    repo: str | None = None,
+    text: str | None = None,
+    reference: str | None = None,
+    state: str | None = None,
+    limit: int = 25,
+) -> list[dict[str, Any]]:
+    """Search synced issues by free text and/or structured references."""
+    normalized_limit = max(1, limit)
+    query = """
+    SELECT
+        r.owner || '/' || r.name AS repo,
+        i.number,
+        i.title,
+        i.state,
+        i.author,
+        i.updated_at,
+        GROUP_CONCAT(DISTINCT l.label) AS labels
+    FROM issues i
+    JOIN repos r ON r.id = i.repo_id
+    LEFT JOIN issue_labels l ON l.issue_id = i.id
+    WHERE 1 = 1
+    """
+    params: list[object] = []
+
+    if repo:
+        repo_ref = RepoRef.from_slug(repo)
+        query += " AND r.owner = ? AND r.name = ?"
+        params.extend([repo_ref.owner, repo_ref.name])
+    if state:
+        query += " AND i.state = ?"
+        params.append(state)
+    if text:
+        text_like = f"%{text.lower()}%"
+        query += " AND (LOWER(COALESCE(i.title, '')) LIKE ? OR LOWER(COALESCE(i.body, '')) LIKE ?)"
+        params.extend([text_like, text_like])
+    if reference:
+        parsed_reference = _parse_reference_filter(reference, repo=repo)
+        clause, clause_params = _reference_exists_clause(
+            parsed_reference,
+            source_sql="(er.source_kind = 'issue' AND er.source_id = i.id)",
+        )
+        query += f" AND {clause}"
+        params.extend(clause_params)
+
+    query += " GROUP BY i.id ORDER BY i.updated_at DESC, i.number DESC LIMIT ?"
+    params.append(normalized_limit)
+    rows = connection.execute(query, params).fetchall()
+    return [
+        {
+            "repo": row["repo"],
+            "number": row["number"],
+            "title": row["title"],
+            "state": row["state"],
+            "author": row["author"] or "unknown",
+            "updated_at": row["updated_at"],
+            "labels": sorted((row["labels"] or "").split(",")) if row["labels"] else [],
+        }
+        for row in rows
+    ]
+
+
+def search_work_items(
+    connection: sqlite3.Connection,
+    *,
+    repo: str | None = None,
+    text: str | None = None,
+    reference: str | None = None,
+    state: str | None = None,
+    limit: int = 25,
+) -> dict[str, Any]:
+    """Search both pull requests and issues using text and/or reference filters."""
+    if not text and not reference:
+        raise ValueError("At least one of text or reference must be provided.")
+    return {
+        "repo": repo,
+        "text": text,
+        "reference": reference,
+        "state": state,
+        "pull_requests": search_pull_requests(
+            connection,
+            repo=repo,
+            text=text,
+            reference=reference,
+            state=state,
+            limit=limit,
+        ),
+        "issues": search_issues(
+            connection,
+            repo=repo,
+            text=text,
+            reference=reference,
+            state=state,
+            limit=limit,
+        ),
+    }
 
 
 def get_pr_decisions(
@@ -292,6 +580,180 @@ def get_pr_labels(
         (repo_ref.owner, repo_ref.name, pr_number),
     ).fetchall()
     return [str(row["label"]) for row in rows]
+
+
+def get_issue_labels(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+    issue_number: int,
+) -> list[str]:
+    repo_ref = RepoRef.from_slug(repo)
+    rows = connection.execute(
+        """
+        SELECT l.label
+        FROM issue_labels l
+        JOIN issues i ON i.id = l.issue_id
+        JOIN repos r ON r.id = i.repo_id
+        WHERE r.owner = ? AND r.name = ? AND i.number = ?
+        ORDER BY l.label ASC
+        """,
+        (repo_ref.owner, repo_ref.name, issue_number),
+    ).fetchall()
+    return [str(row["label"]) for row in rows]
+
+
+def _reference_rows_from_query(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    return [
+        {
+            "source_kind": row["source_kind"],
+            "source_label": row["source_label"],
+            "raw_text": row["raw_text"],
+            "reference_kind": row["reference_kind"],
+            "url": row["url"],
+            "target_repo": row["target_repo"],
+            "target_number": row["target_number"],
+            "target_sha": row["target_sha"],
+            "author": row["author"],
+            "file_path": row["file_path"],
+        }
+        for row in rows
+    ]
+
+
+def get_pr_references(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+    pr_number: int,
+) -> list[dict[str, Any]]:
+    repo_ref = RepoRef.from_slug(repo)
+    rows = connection.execute(
+        """
+        SELECT
+            er.source_kind,
+            CASE
+                WHEN er.source_kind = 'pr' THEN 'PR body'
+                ELSE 'Review comment'
+            END AS source_label,
+            er.raw_text,
+            er.reference_kind,
+            er.url,
+            er.target_repo,
+            er.target_number,
+            er.target_sha,
+            c.author,
+            t.file_path
+        FROM prs p
+        JOIN repos r ON r.id = p.repo_id
+        LEFT JOIN extracted_references er ON (
+            (er.source_kind = 'pr' AND er.source_id = p.id)
+            OR (
+                er.source_kind = 'comment'
+                AND er.source_id IN (
+                    SELECT c2.id
+                    FROM review_comments c2
+                    JOIN review_threads t2 ON t2.id = c2.thread_id
+                    WHERE t2.pr_id = p.id
+                )
+            )
+        )
+        LEFT JOIN review_comments c ON er.source_kind = 'comment' AND c.id = er.source_id
+        LEFT JOIN review_threads t ON c.thread_id = t.id
+        WHERE r.owner = ? AND r.name = ? AND p.number = ? AND er.id IS NOT NULL
+        ORDER BY er.source_kind ASC, c.created_at ASC, er.id ASC
+        """,
+        (repo_ref.owner, repo_ref.name, pr_number),
+    ).fetchall()
+    return _reference_rows_from_query(rows)
+
+
+def get_issue_references(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+    issue_number: int,
+) -> list[dict[str, Any]]:
+    repo_ref = RepoRef.from_slug(repo)
+    rows = connection.execute(
+        """
+        SELECT
+            er.source_kind,
+            'Issue body' AS source_label,
+            er.raw_text,
+            er.reference_kind,
+            er.url,
+            er.target_repo,
+            er.target_number,
+            er.target_sha,
+            i.author,
+            NULL AS file_path
+        FROM issues i
+        JOIN repos r ON r.id = i.repo_id
+        JOIN extracted_references er ON er.source_kind = 'issue' AND er.source_id = i.id
+        WHERE r.owner = ? AND r.name = ? AND i.number = ?
+        ORDER BY er.id ASC
+        """,
+        (repo_ref.owner, repo_ref.name, issue_number),
+    ).fetchall()
+    return _reference_rows_from_query(rows)
+
+
+def get_issue_backreferences(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+    issue_number: int,
+) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        """
+        SELECT
+            er.source_kind,
+            er.raw_text,
+            er.reference_kind,
+            er.url,
+            p.number AS pr_number,
+            p.title AS pr_title,
+            i.number AS source_issue_number,
+            i.title AS source_issue_title,
+            c.author,
+            t.file_path,
+            r.owner || '/' || r.name AS source_repo
+        FROM extracted_references er
+        LEFT JOIN prs p ON er.source_kind = 'pr' AND p.id = er.source_id
+        LEFT JOIN issues i ON er.source_kind = 'issue' AND i.id = er.source_id
+        LEFT JOIN review_comments c ON er.source_kind = 'comment' AND c.id = er.source_id
+        LEFT JOIN review_threads t ON c.thread_id = t.id
+        LEFT JOIN prs cp ON t.pr_id = cp.id
+        LEFT JOIN repos r ON r.id = COALESCE(p.repo_id, i.repo_id, cp.repo_id)
+        WHERE er.target_repo = ?
+          AND er.target_number = ?
+          AND er.reference_kind IN ('issue', 'issue_or_pr')
+        ORDER BY er.id ASC
+        """,
+        (repo, issue_number),
+    ).fetchall()
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if row["source_kind"] == "pr":
+            source_label = f"PR #{row['pr_number']} {row['pr_title']}"
+        elif row["source_kind"] == "issue":
+            source_label = f"Issue #{row['source_issue_number']} {row['source_issue_title']}"
+        else:
+            source_label = f"Comment by {row['author'] or 'unknown'}"
+        result.append(
+            {
+                "source_kind": row["source_kind"],
+                "source_label": source_label,
+                "source_repo": row["source_repo"],
+                "raw_text": row["raw_text"],
+                "reference_kind": row["reference_kind"],
+                "url": row["url"],
+                "file_path": row["file_path"],
+            }
+        )
+    return result
 
 
 def get_repo_sync_status(
@@ -375,6 +837,42 @@ def get_pr_health(
     )
 
 
+def get_issue_context_payload(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+    issue_number: int,
+) -> dict[str, Any]:
+    repo_ref = RepoRef.from_slug(repo)
+    row = connection.execute(
+        """
+        SELECT i.title, i.state, i.author, i.created_at, i.updated_at, i.closed_at, i.body
+        FROM issues i
+        JOIN repos r ON r.id = i.repo_id
+        WHERE r.owner = ? AND r.name = ? AND i.number = ?
+        """,
+        (repo_ref.owner, repo_ref.name, issue_number),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"Issue #{issue_number} not found for {repo}")
+
+    return {
+        "repo": repo,
+        "issue_number": issue_number,
+        "title": row["title"],
+        "state": row["state"],
+        "author": row["author"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "closed_at": row["closed_at"],
+        "body": row["body"] or "",
+        "labels": get_issue_labels(connection, repo=repo, issue_number=issue_number),
+        "references": get_issue_references(connection, repo=repo, issue_number=issue_number),
+        "mentioned_by": get_issue_backreferences(connection, repo=repo, issue_number=issue_number),
+        "repo_status": get_repo_sync_status(connection, repo=repo),
+    }
+
+
 def get_pr_context_payload(
     connection: sqlite3.Connection,
     *,
@@ -394,8 +892,45 @@ def get_pr_context_payload(
         "decisions": get_pr_decisions(connection, repo=repo, pr_number=pr_number),
         "unresolved_threads": unresolved_threads,
         "labels": get_pr_labels(connection, repo=repo, pr_number=pr_number),
+        "references": get_pr_references(connection, repo=repo, pr_number=pr_number),
         "repo_status": get_repo_sync_status(connection, repo=repo),
     }
+
+
+def _filtered_repo_breakdown(
+    connection: sqlite3.Connection,
+    *,
+    unresolved_threads: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    tracked_by_repo = {row["repo"]: row for row in list_tracked_repos(connection)}
+    grouped: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "repo": "",
+            "open_pr_numbers": set(),
+            "unresolved_threads": 0,
+            "blocking_threads": 0,
+            "last_synced_at": None,
+        }
+    )
+
+    for thread in unresolved_threads:
+        row = grouped[thread["repo"]]
+        row["repo"] = thread["repo"]
+        row["open_pr_numbers"].add(thread["pr_number"])
+        row["unresolved_threads"] += 1
+        row["blocking_threads"] += int(thread["blocking"])
+        row["last_synced_at"] = tracked_by_repo.get(thread["repo"], {}).get("last_synced_at")
+
+    return [
+        {
+            "repo": repo_name,
+            "open_prs": len(values["open_pr_numbers"]),
+            "unresolved_threads": values["unresolved_threads"],
+            "blocking_threads": values["blocking_threads"],
+            "last_synced_at": values["last_synced_at"],
+        }
+        for repo_name, values in sorted(grouped.items())
+    ]
 
 
 def get_dashboard_summary(
@@ -406,26 +941,35 @@ def get_dashboard_summary(
     label: str | None = None,
     stale_days: int = 7,
 ) -> dict[str, Any]:
+    normalized_reviewer = reviewer.lstrip("@") if reviewer else None
     unresolved_threads = list_unresolved_threads(
         connection,
         repo=repo,
-        author=reviewer,
+        author=normalized_reviewer,
         label=label,
     )
     stale_threads = [thread for thread in unresolved_threads if thread["age_days"] >= stale_days]
     blocking_threads = [thread for thread in unresolved_threads if thread["blocking"]]
-    tracked_repos = list_tracked_repos(connection, repo=repo)
 
-    repo_breakdown = [
-        {
-            "repo": repo_row["repo"],
-            "open_prs": repo_row["open_prs"],
-            "unresolved_threads": repo_row["unresolved_threads"],
-            "blocking_threads": repo_row["blocking_threads"],
-            "last_synced_at": repo_row["last_synced_at"],
-        }
-        for repo_row in tracked_repos
-    ]
+    use_filtered_totals = normalized_reviewer is not None or label is not None
+    if use_filtered_totals:
+        repo_breakdown = _filtered_repo_breakdown(connection, unresolved_threads=unresolved_threads)
+        open_prs = len({(thread["repo"], thread["pr_number"]) for thread in unresolved_threads})
+        repos_tracked = len({thread["repo"] for thread in unresolved_threads})
+    else:
+        tracked_repos = list_tracked_repos(connection, repo=repo)
+        repo_breakdown = [
+            {
+                "repo": repo_row["repo"],
+                "open_prs": repo_row["open_prs"],
+                "unresolved_threads": repo_row["unresolved_threads"],
+                "blocking_threads": repo_row["blocking_threads"],
+                "last_synced_at": repo_row["last_synced_at"],
+            }
+            for repo_row in tracked_repos
+        ]
+        repos_tracked = len(tracked_repos)
+        open_prs = _count_open_prs(connection, repo=repo)
 
     reviewer_counter = Counter(
         thread["reviewer"] for thread in unresolved_threads if thread["reviewer"] != "unknown"
@@ -444,9 +988,10 @@ def get_dashboard_summary(
 
     return {
         "repo": repo,
-        "reviewer": reviewer.lstrip("@") if reviewer else None,
-        "repos_tracked": len(tracked_repos),
-        "open_prs": _count_open_prs(connection, repo=repo),
+        "reviewer": normalized_reviewer,
+        "label": label,
+        "repos_tracked": repos_tracked,
+        "open_prs": open_prs,
         "unresolved_threads": len(unresolved_threads),
         "blocking_threads": len(blocking_threads),
         "stale_threads": len(stale_threads),

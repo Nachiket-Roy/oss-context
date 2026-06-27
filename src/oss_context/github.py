@@ -1,8 +1,8 @@
 """GitHub API client logic for oss-context.
 
 This module handles REST and GraphQL requests, retries, rate-limit handling,
-pagination, and translation of GitHub pull-request review data into local
-Pydantic models used by the sync pipeline.
+pagination, and translation of GitHub pull-request, review, and issue data into
+local Pydantic models used by the sync pipeline.
 """
 
 from __future__ import annotations
@@ -14,7 +14,13 @@ from typing import Any
 
 import httpx
 
-from oss_context.models import PullRequestData, RepoRef, ReviewCommentData, ReviewThreadData
+from oss_context.models import (
+    IssueData,
+    PullRequestData,
+    RepoRef,
+    ReviewCommentData,
+    ReviewThreadData,
+)
 from oss_context.settings import Settings
 
 
@@ -40,10 +46,7 @@ class GitHubClient:
         }
         if settings.github_token:
             headers["Authorization"] = f"Bearer {settings.github_token}"
-        self.client = httpx.AsyncClient(
-            headers=headers,
-            timeout=settings.request_timeout_seconds,
-        )
+        self.client = httpx.AsyncClient(headers=headers, timeout=settings.request_timeout_seconds)
 
     async def __aenter__(self) -> GitHubClient:
         return self
@@ -212,6 +215,43 @@ class GitHubClient:
                     base_branch=(item.get("base") or {}).get("ref"),
                     head_branch=(item.get("head") or {}).get("ref"),
                     merge_commit_sha=item.get("merge_commit_sha"),
+                    labels=[label["name"] for label in item.get("labels", []) if label.get("name")],
+                )
+            if cutoff_reached:
+                break
+            next_url = response.links.get("next", {}).get("url")
+
+    async def iter_issues(
+        self,
+        repo: RepoRef,
+        since: datetime | None = None,
+    ) -> AsyncIterator[IssueData]:
+        next_url = (
+            f"/repos/{repo.owner}/{repo.name}/issues"
+            "?state=all&sort=updated&direction=desc&per_page=100"
+        )
+
+        while next_url:
+            response = await self._request("GET", next_url)
+            items = response.json()
+            cutoff_reached = False
+            for item in items:
+                if item.get("pull_request"):
+                    continue
+                updated_at = parse_github_datetime(item.get("updated_at"))
+                if since and updated_at and updated_at <= since:
+                    cutoff_reached = True
+                    continue
+                yield IssueData(
+                    github_id=item["id"],
+                    number=item["number"],
+                    title=item["title"],
+                    state=item["state"],
+                    author=(item.get("user") or {}).get("login"),
+                    created_at=parse_github_datetime(item.get("created_at")),
+                    updated_at=updated_at,
+                    closed_at=parse_github_datetime(item.get("closed_at")),
+                    body=item.get("body"),
                     labels=[label["name"] for label in item.get("labels", []) if label.get("name")],
                 )
             if cutoff_reached:

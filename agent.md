@@ -4,7 +4,7 @@ This file is a short guide for coding agents and contributors working in this re
 
 ## What this repository does
 
-`oss-context` syncs GitHub pull-request review state into SQLite, extracts decision signals from comments, exposes cross-repo dashboard summaries, and serves that context through both a CLI and an MCP server.
+`oss-context` syncs GitHub pull-request and issue state into SQLite, extracts decision signals and structured references from bodies/comments, exposes cross-repo dashboard summaries, and serves that context through a CLI, an MCP server, and a local HTML UI.
 
 ## Repository layout
 
@@ -15,6 +15,7 @@ This file is a short guide for coding agents and contributors working in this re
 - `README.md` — user-facing setup and usage guide
 - `src/oss_context/mcp_server.py` — FastMCP server tools and resources
 - `src/oss_context/markdown.py` — markdown assembly for MCP responses
+- `src/oss_context/web_ui.py` — local HTML dashboard and detail pages
 
 ## File documentation convention
 
