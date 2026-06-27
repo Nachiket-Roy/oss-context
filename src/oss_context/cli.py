@@ -139,8 +139,12 @@ def query(
         raise typer.BadParameter("--pr is required with --health")
     if reviewer_status and not author:
         raise typer.BadParameter("--author/--reviewer is required with --reviewer-status")
+    if context and pr is None and issue is None:
+        raise typer.BadParameter("--context requires --pr or --issue")
     if pr is not None and not (decisions or health or context):
         raise typer.BadParameter("--pr requires --decisions, --health, or --context")
+    if issue is not None and not context and (dashboard or repos or reviewer_status):
+        raise typer.BadParameter("--issue requires --context when combined with other views")
 
     settings = _load_cli_settings(db_path)
     connection = DatabaseManager(settings.db_path).initialize()
@@ -191,7 +195,7 @@ def query(
                 )
                 console.print(render_issue_context(payload))
             else:
-                raise typer.BadParameter("--context requires --pr or --issue")
+                raise AssertionError("preflight validation should require --pr or --issue")
 
         explicit_view_selected = any(
             [
