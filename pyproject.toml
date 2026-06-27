@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "oss-context"
+version = "0.1.0"
+description = "Track PR review decisions, reviewer state, and unresolved threads across GitHub pull requests."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+  { name = "oss-context contributors" }
+]
+dependencies = [
+  "httpx>=0.27.0",
+  "pydantic>=2.7.0",
+  "rich>=13.7.0",
+  "sqlite-utils>=3.36",
+  "typer>=0.12.3"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pyright>=1.1.390",
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.7",
+  "ruff>=0.5.0"
+]
+
+[project.scripts]
+oss-context = "oss_context.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/oss_context"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]
