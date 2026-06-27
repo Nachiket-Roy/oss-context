@@ -121,16 +121,10 @@ def query(
         False,
         help="Show only unresolved threads waiting on the reviewer to respond.",
     ),
-    all_repos: bool = typer.Option(
-        False,
-        help="Explicitly query across all tracked repositories.",
-    ),
     db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
 ) -> None:
     """Query unresolved state, PR health, issue context, and repo dashboards."""
     normalized_repo = _normalize_repo(repo)
-    if all_repos and normalized_repo is not None:
-        raise typer.BadParameter("--all-repos cannot be used together with --repo")
     if pr is not None and issue is not None:
         raise typer.BadParameter("--pr and --issue cannot be used together")
     if (pr is not None or issue is not None) and normalized_repo is None:
@@ -145,6 +139,8 @@ def query(
         raise typer.BadParameter("--pr is required with --health")
     if reviewer_status and not author:
         raise typer.BadParameter("--author/--reviewer is required with --reviewer-status")
+    if pr is not None and not (decisions or health or context):
+        raise typer.BadParameter("--pr requires --decisions, --health, or --context")
 
     settings = _load_cli_settings(db_path)
     connection = DatabaseManager(settings.db_path).initialize()

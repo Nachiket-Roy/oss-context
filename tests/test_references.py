@@ -34,4 +34,4 @@ def test_extract_references_parses_issue_pr_commit_and_urls():
         ref.kind == "issue_or_pr" and ref.target_repo == "acme/widgets" and ref.target_number == 51
         for ref in references
     )
-    assert any(ref.kind == "url" and ref.url == "https://example.com/docs." for ref in references)
+    assert any(ref.kind == "url" and ref.url == "https://example.com/docs" for ref in references)

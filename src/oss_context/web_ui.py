@@ -18,7 +18,6 @@ from oss_context.queries import (
     get_issue_context_payload,
     get_pr_context_payload,
     list_repo_issues,
-    list_tracked_repos,
     list_unresolved_threads,
 )
 from oss_context.settings import Settings
@@ -191,6 +190,14 @@ def _issue_link(repo: str, issue_number: int, label: str | None = None) -> str:
     return f'<a href="/issue/{quote(owner)}/{quote(name)}/{issue_number}">{escape(text)}</a>'
 
 
+def _safe_external_link(url: str) -> str | None:
+    """Return a safe external href for rendered references."""
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return None
+    return url
+
+
 def _reference_target(reference: dict[str, Any]) -> str:
     """Render a linked or plain-text reference target."""
     repo = reference.get("target_repo")
@@ -202,7 +209,10 @@ def _reference_target(reference: dict[str, Any]) -> str:
         return _issue_link(repo, number)
     if reference.get("url"):
         url = str(reference["url"])
-        return f'<a href="{escape(url, quote=True)}">{escape(url)}</a>'
+        safe_url = _safe_external_link(url)
+        if safe_url is not None:
+            return f'<a href="{escape(safe_url, quote=True)}">{escape(safe_url)}</a>'
+        return f"<code>{escape(url)}</code>"
     if repo and number is not None:
         return f"<code>{escape(repo)}#{number}</code>"
     if repo and reference.get("target_sha"):
@@ -288,7 +298,6 @@ def _render_dashboard_body(
         label=label,
         stale_days=stale_days,
     )
-    tracked_repos = list_tracked_repos(connection, repo=repo)
     unresolved = list_unresolved_threads(
         connection,
         repo=repo,
@@ -316,7 +325,7 @@ def _render_dashboard_body(
             escape(str(row["blocking_threads"])),
             escape(row["last_synced_at"] or "never"),
         ]
-        for row in tracked_repos
+        for row in summary["repo_breakdown"]
     ]
     unresolved_rows = [
         [
@@ -515,19 +524,6 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                     self._send_html(_page(title, body))
                     return
 
-                if len(parts) == 3 and parts[0] == "repo":
-                    repo = f"{parts[1]}/{parts[2]}"
-                    title = f"Repository · {repo}"
-                    body = _render_dashboard_body(
-                        connection=connection,
-                        repo=repo,
-                        reviewer=reviewer,
-                        label=label,
-                        stale_days=stale_days,
-                    )
-                    self._send_html(_page(title, body))
-                    return
-
                 if len(parts) == 4 and parts[0] == "repo" and parts[3] == "issues":
                     repo = f"{parts[1]}/{parts[2]}"
                     state = query.get("state", [None])[0] or None
@@ -537,6 +533,19 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                         repo=repo,
                         state=state,
                         label=label,
+                    )
+                    self._send_html(_page(title, body))
+                    return
+
+                if len(parts) == 3 and parts[0] == "repo":
+                    repo = f"{parts[1]}/{parts[2]}"
+                    title = f"Repository · {repo}"
+                    body = _render_dashboard_body(
+                        connection=connection,
+                        repo=repo,
+                        reviewer=reviewer,
+                        label=label,
+                        stale_days=stale_days,
                     )
                     self._send_html(_page(title, body))
                     return

@@ -53,4 +53,5 @@ def test_issue_context_markdown_escapes_untrusted_text():
     assert "\\# urgent \\`do this\\`" in markdown
     assert "```suggestion" not in markdown
     assert "Comment by \\`bob\\`" in markdown
-    assert "\\[security\\]" in markdown
+    assert "`p0`" in markdown
+    assert "`[security]`" in markdown

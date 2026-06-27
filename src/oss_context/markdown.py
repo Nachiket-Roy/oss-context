@@ -12,6 +12,7 @@ from oss_context.models import PRHealthSummary
 
 
 def _md_escape(value: str | None) -> str:
+    """Escape user-controlled text for plain markdown prose."""
     if not value:
         return ""
     compact = " ".join(value.split())
@@ -19,6 +20,14 @@ def _md_escape(value: str | None) -> str:
     for char in ("`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", "!", ">", "|"):
         escaped = escaped.replace(char, f"\\{char}")
     return escaped
+
+
+def _md_code(value: str | None) -> str:
+    """Escape text for markdown inline code spans without over-escaping content."""
+    if not value:
+        return ""
+    compact = " ".join(value.split())
+    return compact.replace("\\", "\\\\").replace("`", "\\`")
 
 
 def _bullet_list(items: list[str]) -> str:
@@ -56,8 +65,8 @@ def _thread_lines(rows: list[dict]) -> str:
     for row in rows:
         marker = "blocking" if row["blocking"] else row["decision_type"].lower()
         lines.append(
-            f"- `{_md_escape(row['file_path'])}` · reviewer `{_md_escape(row['reviewer'])}` · "
-            f"{_md_escape(marker)} · waiting on `{_md_escape(row['waiting_on'])}` · "
+            f"- `{_md_code(row['file_path'])}` · reviewer `{_md_code(row['reviewer'])}` · "
+            f"{_md_escape(marker)} · waiting on `{_md_code(row['waiting_on'])}` · "
             f"{_md_escape(row['summary'])}"
         )
     return "\n".join(lines)
@@ -79,7 +88,7 @@ def render_pr_context_markdown(payload: dict) -> str:
             f"Blocking threads: {health.blocking_threads}",
             "",
             "## Labels",
-            _bullet_list([f"`{_md_escape(label)}`" for label in labels]),
+            _bullet_list([f"`{_md_code(label)}`" for label in labels]),
             "",
             "## Unresolved threads",
             _thread_lines(payload["unresolved_threads"]),
@@ -90,7 +99,7 @@ def render_pr_context_markdown(payload: dict) -> str:
             "## Decision history",
             _bullet_list(
                 [
-                    f"`{_md_escape(row['author'])}` · {_md_escape(row['decision_type'])} · "
+                    f"`{_md_code(row['author'])}` · {_md_escape(row['decision_type'])} · "
                     f"{_md_escape(row['summary'])}"
                     for row in payload["decisions"]
                 ]
@@ -110,7 +119,7 @@ def render_issue_context_markdown(payload: dict) -> str:
             f"Last synced: {_md_escape(payload['repo_status']['last_synced_at'] or 'never')}",
             "",
             "## Labels",
-            _bullet_list([f"`{_md_escape(label)}`" for label in payload["labels"]]),
+            _bullet_list([f"`{_md_code(label)}`" for label in payload["labels"]]),
             "",
             "## Body",
             _bullet_list([_md_escape(payload["body"])]) if payload["body"] else "- empty",
@@ -153,7 +162,7 @@ def render_reviewer_status_markdown(status: dict) -> str:
 def render_dashboard_markdown(summary: dict) -> str:
     repo_lines = [
         (
-            f"`{_md_escape(row['repo'])}` · open PRs {row['open_prs']} "
+            f"`{_md_code(row['repo'])}` · open PRs {row['open_prs']} "
             f"· unresolved {row['unresolved_threads']} "
             f"· blocking {row['blocking_threads']} "
             f"· synced {_md_escape(row['last_synced_at'] or 'never')}"
@@ -162,7 +171,7 @@ def render_dashboard_markdown(summary: dict) -> str:
     ]
     reviewer_lines = [
         (
-            f"`{_md_escape(row['reviewer'])}` · unresolved {row['unresolved_threads']} "
+            f"`{_md_code(row['reviewer'])}` · unresolved {row['unresolved_threads']} "
             f"· blocking {row['blocking_threads']}"
         )
         for row in summary["reviewer_load"]

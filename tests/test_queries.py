@@ -171,7 +171,7 @@ def test_unresolved_thread_uses_latest_classified_comment(tmp_path):
                 'REQUEST_CHANGES', 'Blocking fix', 0.99, ?
             )
             """,
-            (now.isoformat(),),
+            ((now - timedelta(minutes=2)).isoformat(),),
         )
         connection.execute(
             """
@@ -184,7 +184,7 @@ def test_unresolved_thread_uses_latest_classified_comment(tmp_path):
                 'ACKNOWLEDGMENT', 'Done, updated.', 0.40, ?
             )
             """,
-            (now.isoformat(),),
+            ((now - timedelta(minutes=1)).isoformat(),),
         )
         connection.commit()
 
@@ -452,6 +452,7 @@ def test_dashboard_summary_issue_context_and_filtered_scope(tmp_path):
                 "open_prs": 1,
                 "unresolved_threads": 1,
                 "blocking_threads": 1,
+                "open_issues": 1,
                 "last_synced_at": reviewer_dashboard["repo_breakdown"][0]["last_synced_at"],
             }
         ]

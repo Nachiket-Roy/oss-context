@@ -236,11 +236,11 @@ class GitHubClient:
             items = response.json()
             cutoff_reached = False
             for item in items:
-                if item.get("pull_request"):
-                    continue
                 updated_at = parse_github_datetime(item.get("updated_at"))
                 if since and updated_at and updated_at <= since:
                     cutoff_reached = True
+                    continue
+                if item.get("pull_request"):
                     continue
                 yield IssueData(
                     github_id=item["id"],

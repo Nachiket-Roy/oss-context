@@ -26,12 +26,18 @@ CROSS_REPO_REF_RE = re.compile(
 EXPLICIT_ISSUE_RE = re.compile(r"\bissue\s+#?(?P<number>\d+)\b", re.IGNORECASE)
 BARE_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_/.-])#(?P<number>\d+)\b")
 URL_RE = re.compile(r"https?://[^\s)>\]]+")
+TRAILING_URL_PUNCTUATION = ".,;:!?"
 
 
 def _span_overlaps(existing: list[tuple[int, int]], start: int, end: int) -> bool:
     return any(
         not (end <= other_start or start >= other_end) for other_start, other_end in existing
     )
+
+
+def _normalize_url(url: str) -> str:
+    """Strip trailing punctuation that commonly surrounds prose URLs."""
+    return url.rstrip(TRAILING_URL_PUNCTUATION)
 
 
 def extract_references(text: str | None, *, repo: str) -> list[ExtractedReference]:
@@ -119,12 +125,13 @@ def extract_references(text: str | None, *, repo: str) -> list[ExtractedReferenc
         )
 
     for match in URL_RE.finditer(text):
+        normalized_url = _normalize_url(match.group(0))
         add_reference(
             match,
             ExtractedReference(
                 kind="url",
                 raw_text=match.group(0),
-                url=match.group(0),
+                url=normalized_url,
             ),
         )
 

@@ -183,39 +183,56 @@ def list_tracked_repos(
     repo: str | None = None,
 ) -> list[dict[str, Any]]:
     query = """
+    WITH pr_stats AS (
+        SELECT
+            p.repo_id,
+            COUNT(DISTINCT CASE WHEN p.state = 'open' THEN p.id END) AS open_prs,
+            COUNT(DISTINCT CASE WHEN t.thread_state = 'active' THEN t.id END) AS unresolved_threads,
+            COUNT(
+                DISTINCT CASE
+                    WHEN t.thread_state = 'active'
+                     AND latest_cache.decision_type = 'REQUEST_CHANGES'
+                    THEN t.id
+                END
+            ) AS blocking_threads
+        FROM prs p
+        LEFT JOIN review_threads t ON t.pr_id = p.id
+        LEFT JOIN llm_cache latest_cache ON latest_cache.comment_id = (
+            SELECT rc.id
+            FROM review_comments rc
+            JOIN llm_cache cache ON cache.comment_id = rc.id
+            WHERE rc.thread_id = t.id
+            ORDER BY rc.created_at DESC, rc.id DESC
+            LIMIT 1
+        )
+        GROUP BY p.repo_id
+    ),
+    issue_stats AS (
+        SELECT
+            i.repo_id,
+            COUNT(DISTINCT CASE WHEN i.state = 'open' THEN i.id END) AS open_issues
+        FROM issues i
+        GROUP BY i.repo_id
+    )
     SELECT
         r.owner,
         r.name,
         r.default_branch,
         r.last_synced_at,
-        COUNT(DISTINCT CASE WHEN p.state = 'open' THEN p.id END) AS open_prs,
-        COUNT(DISTINCT CASE WHEN t.thread_state = 'active' THEN t.id END) AS unresolved_threads,
-        COUNT(
-            DISTINCT CASE
-                WHEN t.thread_state = 'active' AND latest_cache.decision_type = 'REQUEST_CHANGES'
-                THEN t.id
-            END
-        ) AS blocking_threads,
-        COUNT(DISTINCT CASE WHEN i.state = 'open' THEN i.id END) AS open_issues
+        COALESCE(pr_stats.open_prs, 0) AS open_prs,
+        COALESCE(pr_stats.unresolved_threads, 0) AS unresolved_threads,
+        COALESCE(pr_stats.blocking_threads, 0) AS blocking_threads,
+        COALESCE(issue_stats.open_issues, 0) AS open_issues
     FROM repos r
-    LEFT JOIN prs p ON p.repo_id = r.id
-    LEFT JOIN issues i ON i.repo_id = r.id
-    LEFT JOIN review_threads t ON t.pr_id = p.id
-    LEFT JOIN llm_cache latest_cache ON latest_cache.comment_id = (
-        SELECT rc.id
-        FROM review_comments rc
-        JOIN llm_cache cache ON cache.comment_id = rc.id
-        WHERE rc.thread_id = t.id
-        ORDER BY rc.created_at DESC, rc.id DESC
-        LIMIT 1
-    )
+    LEFT JOIN pr_stats ON pr_stats.repo_id = r.id
+    LEFT JOIN issue_stats ON issue_stats.repo_id = r.id
     """
     params: list[object] = []
     if repo:
         repo_ref = RepoRef.from_slug(repo)
         query += " WHERE r.owner = ? AND r.name = ?"
         params.extend([repo_ref.owner, repo_ref.name])
-    query += " GROUP BY r.id ORDER BY unresolved_threads DESC, open_prs DESC, r.owner, r.name"
+    query += " ORDER BY unresolved_threads DESC, open_prs DESC, r.owner, r.name"
 
     rows = connection.execute(query, params).fetchall()
     return [
@@ -312,11 +329,6 @@ def _reference_exists_clause(
     reference: dict[str, Any], *, source_sql: str
 ) -> tuple[str, list[object]]:
     """Build a source-scoped EXISTS clause for extracted references."""
-    if reference["url"]:
-        return (
-            f"EXISTS (SELECT 1 FROM extracted_references er WHERE {source_sql} AND er.url = ?)",
-            [reference["url"]],
-        )
     if reference["target_repo"] and reference["target_number"] is not None:
         return (
             f"EXISTS (SELECT 1 FROM extracted_references er WHERE {source_sql} "
@@ -328,6 +340,11 @@ def _reference_exists_clause(
             f"EXISTS (SELECT 1 FROM extracted_references er WHERE {source_sql} "
             "AND er.target_repo = ? AND er.target_sha = ?)",
             [reference["target_repo"], reference["target_sha"]],
+        )
+    if reference["url"]:
+        return (
+            f"EXISTS (SELECT 1 FROM extracted_references er WHERE {source_sql} AND er.url = ?)",
+            [reference["url"]],
         )
     return (
         f"EXISTS (SELECT 1 FROM extracted_references er WHERE {source_sql} AND er.raw_text = ?)",
@@ -642,7 +659,7 @@ def get_pr_references(
             er.target_repo,
             er.target_number,
             er.target_sha,
-            c.author,
+            COALESCE(c.author, p.author) AS author,
             t.file_path
         FROM prs p
         JOIN repos r ON r.id = p.repo_id
@@ -910,6 +927,7 @@ def _filtered_repo_breakdown(
             "unresolved_threads": 0,
             "blocking_threads": 0,
             "last_synced_at": None,
+            "open_issues": 0,
         }
     )
 
@@ -919,7 +937,9 @@ def _filtered_repo_breakdown(
         row["open_pr_numbers"].add(thread["pr_number"])
         row["unresolved_threads"] += 1
         row["blocking_threads"] += int(thread["blocking"])
-        row["last_synced_at"] = tracked_by_repo.get(thread["repo"], {}).get("last_synced_at")
+        tracked_repo = tracked_by_repo.get(thread["repo"], {})
+        row["last_synced_at"] = tracked_repo.get("last_synced_at")
+        row["open_issues"] = tracked_repo.get("open_issues", 0)
 
     return [
         {
@@ -927,6 +947,7 @@ def _filtered_repo_breakdown(
             "open_prs": len(values["open_pr_numbers"]),
             "unresolved_threads": values["unresolved_threads"],
             "blocking_threads": values["blocking_threads"],
+            "open_issues": values["open_issues"],
             "last_synced_at": values["last_synced_at"],
         }
         for repo_name, values in sorted(grouped.items())
@@ -964,6 +985,7 @@ def get_dashboard_summary(
                 "open_prs": repo_row["open_prs"],
                 "unresolved_threads": repo_row["unresolved_threads"],
                 "blocking_threads": repo_row["blocking_threads"],
+                "open_issues": repo_row["open_issues"],
                 "last_synced_at": repo_row["last_synced_at"],
             }
             for repo_row in tracked_repos
