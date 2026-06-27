@@ -3,17 +3,17 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 
-from prcontext.db import DatabaseManager
-from prcontext.github import GitHubClient
-from prcontext.intelligence import analyze_pending_comments
-from prcontext.models import (
+from oss_context.db import DatabaseManager
+from oss_context.github import GitHubClient
+from oss_context.intelligence import analyze_pending_comments
+from oss_context.models import (
     PullRequestData,
     RepoRef,
     ReviewCommentData,
     ReviewThreadData,
     SyncReport,
 )
-from prcontext.settings import Settings
+from oss_context.settings import Settings
 
 
 def _iso(value: datetime | None) -> str | None:

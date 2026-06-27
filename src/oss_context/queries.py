@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import Any
 
-from prcontext.models import PRHealthSummary
+from oss_context.models import PRHealthSummary
 
 
 def _parse_dt(value: str | None) -> datetime | None:

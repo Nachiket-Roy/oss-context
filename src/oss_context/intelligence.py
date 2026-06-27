@@ -4,9 +4,9 @@ import hashlib
 import sqlite3
 from datetime import UTC, datetime
 
-from prcontext.llm import LLMClassifier
-from prcontext.models import CommentForAnalysis
-from prcontext.settings import Settings
+from oss_context.llm import LLMClassifier
+from oss_context.models import CommentForAnalysis
+from oss_context.settings import Settings
 
 
 def _now_iso() -> str:
@@ -99,7 +99,10 @@ async def analyze_pending_comments(
             )
             connection.execute(
                 """
-                INSERT INTO llm_cache(comment_id, provider, model, input_hash, decision_type, summary, confidence, analyzed_at)
+                INSERT INTO llm_cache(
+                    comment_id, provider, model, input_hash,
+                    decision_type, summary, confidence, analyzed_at
+                )
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(comment_id) DO UPDATE SET
                     provider = excluded.provider,
@@ -129,7 +132,10 @@ async def analyze_pending_comments(
             if not existing_log:
                 connection.execute(
                     """
-                    INSERT INTO decision_log(pr_id, comment_id, decision_type, extracted_summary, raw_text, raw_text_hash, extracted_at)
+                    INSERT INTO decision_log(
+                        pr_id, comment_id, decision_type,
+                        extracted_summary, raw_text, raw_text_hash, extracted_at
+                    )
                     VALUES(?, ?, ?, ?, ?, ?, ?)
                     """,
                     (

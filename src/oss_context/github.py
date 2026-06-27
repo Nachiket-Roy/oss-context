@@ -147,7 +147,9 @@ class GitHubClient:
         pr_number: int,
     ) -> list[ReviewThreadData]:
         query = """
-        query PullRequestReviewThreads($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+        query PullRequestReviewThreads(
+          $owner: String!, $name: String!, $number: Int!, $cursor: String
+        ) {
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
               reviewThreads(first: 100, after: $cursor) {

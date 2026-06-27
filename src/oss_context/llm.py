@@ -5,8 +5,8 @@ import re
 
 import httpx
 
-from prcontext.models import CommentForAnalysis, DecisionExtraction
-from prcontext.settings import Settings
+from oss_context.models import CommentForAnalysis, DecisionExtraction
+from oss_context.settings import Settings
 
 SYSTEM_PROMPT = """You classify GitHub PR review comments.
 Return one result per comment with these fields:

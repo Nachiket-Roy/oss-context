@@ -5,7 +5,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from prcontext.models import PRHealthSummary, SyncReport
+from oss_context.models import PRHealthSummary, SyncReport
 
 
 def render_sync_report(report: SyncReport) -> Panel:
