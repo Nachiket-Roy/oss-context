@@ -4,7 +4,7 @@ This file is a short guide for coding agents and contributors working in this re
 
 ## What this repository does
 
-`oss-context` syncs GitHub pull-request review state into SQLite, extracts decision signals from comments, and exposes that state through a CLI-oriented knowledge graph.
+`oss-context` syncs GitHub pull-request review state into SQLite, extracts decision signals from comments, exposes cross-repo dashboard summaries, and serves that context through both a CLI and an MCP server.
 
 ## Repository layout
 
@@ -13,6 +13,8 @@ This file is a short guide for coding agents and contributors working in this re
 - `.github/workflows/ci.yml` — CI pipeline for lint, type checking, and tests
 - `pyproject.toml` — packaging, dependencies, and tool configuration
 - `README.md` — user-facing setup and usage guide
+- `src/oss_context/mcp_server.py` — FastMCP server tools and resources
+- `src/oss_context/markdown.py` — markdown assembly for MCP responses
 
 ## File documentation convention
 
@@ -52,4 +54,5 @@ uv sync --extra dev && uv run ruff check . && uv run pyright && uv run pytest
 - Keep edits focused and minimal.
 - Prefer adding tests alongside behavior changes.
 - Keep local commands aligned with `.github/workflows/ci.yml`.
+- Keep MCP tools/resources and CLI query behavior consistent when they expose the same underlying data.
 - Do not edit generated files unless regeneration is intentional.

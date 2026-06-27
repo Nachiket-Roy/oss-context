@@ -1,7 +1,8 @@
 """Rich terminal rendering helpers for oss-context output.
 
 This module turns sync reports, unresolved thread lists, extracted decisions,
-and PR health summaries into readable tables and panels for CLI users.
+PR health summaries, reviewer status, and cross-repo dashboard data into
+readable tables and panels for CLI users.
 """
 
 from __future__ import annotations
@@ -30,7 +31,9 @@ def render_sync_report(report: SyncReport) -> Panel:
 def render_unresolved_threads(rows: list[dict]) -> Panel:
     if not rows:
         return Panel(
-            "No unresolved threads found.", title="Unresolved threads", border_style="green"
+            "No unresolved threads found.",
+            title="Unresolved threads",
+            border_style="green",
         )
 
     table = Table(show_lines=False)
@@ -127,3 +130,85 @@ def render_pr_health(summary: PRHealthSummary) -> Panel:
         "green" if summary.health_score >= 80 else "yellow" if summary.health_score >= 50 else "red"
     )
     return Panel(content, title="PR health", border_style=border_style)
+
+
+def render_tracked_repos(rows: list[dict]) -> Panel:
+    if not rows:
+        return Panel("No synced repositories found.", title="Tracked repos", border_style="yellow")
+
+    table = Table(show_lines=False)
+    table.add_column("Repo", style="cyan", no_wrap=True)
+    table.add_column("Default branch")
+    table.add_column("Open PRs", justify="right")
+    table.add_column("Unresolved", justify="right")
+    table.add_column("Blocking", justify="right")
+    table.add_column("Last synced")
+
+    for row in rows:
+        table.add_row(
+            row["repo"],
+            row["default_branch"] or "—",
+            str(row["open_prs"]),
+            str(row["unresolved_threads"]),
+            str(row["blocking_threads"]),
+            row["last_synced_at"] or "never",
+        )
+
+    return Panel(table, title="Tracked repos", border_style="blue")
+
+
+def render_reviewer_status(status: dict) -> Panel:
+    metrics = Table.grid(padding=(0, 2))
+    metrics.add_row("Scope", status["repo"])
+    metrics.add_row("Reviewer", status["reviewer"])
+    metrics.add_row("Unresolved threads", str(status["unresolved_threads"]))
+    metrics.add_row("Blocking threads", str(status["blocking_threads"]))
+    metrics.add_row("Waiting on reviewer", str(status["pending_threads"]))
+    metrics.add_row("Waiting on author", str(status["waiting_on_author_threads"]))
+
+    return Panel(metrics, title="Reviewer status", border_style="magenta")
+
+
+def render_dashboard(summary: dict) -> Panel:
+    metrics = Table.grid(padding=(0, 2))
+    metrics.add_row("Scope", summary["repo"] or "all repos")
+    metrics.add_row("Repos tracked", str(summary["repos_tracked"]))
+    metrics.add_row("Open PRs", str(summary["open_prs"]))
+    metrics.add_row("Unresolved threads", str(summary["unresolved_threads"]))
+    metrics.add_row("Blocking threads", str(summary["blocking_threads"]))
+    metrics.add_row(
+        f"Stale threads (≥{summary['stale_days']}d)",
+        str(summary["stale_threads"]),
+    )
+
+    repo_table = Table(show_header=True)
+    repo_table.add_column("Repo", style="cyan")
+    repo_table.add_column("Open PRs", justify="right")
+    repo_table.add_column("Unresolved", justify="right")
+    repo_table.add_column("Blocking", justify="right")
+    repo_table.add_column("Last synced")
+
+    for row in summary["repo_breakdown"]:
+        repo_table.add_row(
+            row["repo"],
+            str(row["open_prs"]),
+            str(row["unresolved_threads"]),
+            str(row["blocking_threads"]),
+            row["last_synced_at"] or "never",
+        )
+
+    reviewer_table = Table(show_header=True)
+    reviewer_table.add_column("Reviewer")
+    reviewer_table.add_column("Unresolved", justify="right")
+    reviewer_table.add_column("Blocking", justify="right")
+
+    for row in summary["reviewer_load"]:
+        reviewer_table.add_row(
+            row["reviewer"],
+            str(row["unresolved_threads"]),
+            str(row["blocking_threads"]),
+        )
+
+    content = Group(metrics, Text(""), repo_table, Text(""), reviewer_table)
+    border_style = "red" if summary["blocking_threads"] else "green"
+    return Panel(content, title="Dashboard", border_style=border_style)

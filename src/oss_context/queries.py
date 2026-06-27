@@ -1,13 +1,15 @@
 """SQLite query helpers for unresolved state and PR summaries.
 
 This module assembles the higher-level read views used by the CLI, including
-unresolved review threads, decision timelines, reviewer status, and PR health
-scoring derived from the synced local graph.
+unresolved review threads, decision timelines, reviewer status, repository
+freshness, and cross-repo dashboard summaries derived from the synced local
+knowledge graph.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
@@ -95,7 +97,7 @@ def _annotate_thread(row: sqlite3.Row) -> dict[str, Any]:
     last_author = row["last_author"]
     pr_author = row["pr_author"]
     waiting_on = pr_author if last_author != pr_author else reviewer
-    state = "PENDING_AUTHOR" if waiting_on == pr_author else "WAITING_ON_REVIEWER"
+    reviewer_state = "PENDING_AUTHOR" if waiting_on == pr_author else "WAITING_ON_REVIEWER"
     decision_type = row["decision_type"] or "QUESTION"
     summary = _short_text(row["decision_summary"] or row["last_body"])
     last_activity = _parse_dt(row["last_comment_at"] or row["thread_updated_at"])
@@ -116,10 +118,26 @@ def _annotate_thread(row: sqlite3.Row) -> dict[str, Any]:
         "summary": summary,
         "last_author": last_author,
         "waiting_on": waiting_on,
-        "reviewer_state": state,
+        "reviewer_state": reviewer_state,
         "blocking": blocking,
         "age_days": age_days,
+        "last_activity": last_activity.isoformat() if last_activity else None,
     }
+
+
+def _count_open_prs(connection: sqlite3.Connection, repo: str | None = None) -> int:
+    query = (
+        "SELECT COUNT(*) AS total FROM prs p "
+        "JOIN repos r ON r.id = p.repo_id "
+        "WHERE p.state = 'open'"
+    )
+    params: list[object] = []
+    if repo:
+        repo_ref = RepoRef.from_slug(repo)
+        query += " AND r.owner = ? AND r.name = ?"
+        params.extend([repo_ref.owner, repo_ref.name])
+    row = connection.execute(query, params).fetchone()
+    return int(row["total"] or 0)
 
 
 def list_unresolved_threads(
@@ -129,6 +147,7 @@ def list_unresolved_threads(
     author: str | None = None,
     label: str | None = None,
     stale_days: int | None = None,
+    pending_only: bool = False,
 ) -> list[dict[str, Any]]:
     query = _base_thread_query() + " WHERE t.thread_state = 'active'"
     params: list[object] = []
@@ -148,9 +167,65 @@ def list_unresolved_threads(
     if author:
         normalized_author = author.lstrip("@")
         threads = [thread for thread in threads if thread["reviewer"] == normalized_author]
+    if pending_only:
+        threads = [
+            thread for thread in threads if thread["reviewer_state"] == "WAITING_ON_REVIEWER"
+        ]
     if stale_days is not None:
         threads = [thread for thread in threads if thread["age_days"] >= stale_days]
     return threads
+
+
+def list_tracked_repos(
+    connection: sqlite3.Connection,
+    *,
+    repo: str | None = None,
+) -> list[dict[str, Any]]:
+    query = """
+    SELECT
+        r.owner,
+        r.name,
+        r.default_branch,
+        r.last_synced_at,
+        COUNT(DISTINCT CASE WHEN p.state = 'open' THEN p.id END) AS open_prs,
+        COUNT(DISTINCT CASE WHEN t.thread_state = 'active' THEN t.id END) AS unresolved_threads,
+        COUNT(
+            DISTINCT CASE
+                WHEN t.thread_state = 'active' AND latest_cache.decision_type = 'REQUEST_CHANGES'
+                THEN t.id
+            END
+        ) AS blocking_threads
+    FROM repos r
+    LEFT JOIN prs p ON p.repo_id = r.id
+    LEFT JOIN review_threads t ON t.pr_id = p.id
+    LEFT JOIN llm_cache latest_cache ON latest_cache.comment_id = (
+        SELECT rc.id
+        FROM review_comments rc
+        JOIN llm_cache cache ON cache.comment_id = rc.id
+        WHERE rc.thread_id = t.id
+        ORDER BY rc.created_at DESC, rc.id DESC
+        LIMIT 1
+    )
+    """
+    params: list[object] = []
+    if repo:
+        repo_ref = RepoRef.from_slug(repo)
+        query += " WHERE r.owner = ? AND r.name = ?"
+        params.extend([repo_ref.owner, repo_ref.name])
+    query += " GROUP BY r.id ORDER BY unresolved_threads DESC, open_prs DESC, r.owner, r.name"
+
+    rows = connection.execute(query, params).fetchall()
+    return [
+        {
+            "repo": f"{row['owner']}/{row['name']}",
+            "default_branch": row["default_branch"],
+            "last_synced_at": row["last_synced_at"],
+            "open_prs": int(row["open_prs"] or 0),
+            "unresolved_threads": int(row["unresolved_threads"] or 0),
+            "blocking_threads": int(row["blocking_threads"] or 0),
+        }
+        for row in rows
+    ]
 
 
 def get_pr_decisions(
@@ -196,6 +271,38 @@ def get_pr_decisions(
         }
         for row in rows
     ]
+
+
+def get_pr_labels(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+    pr_number: int,
+) -> list[str]:
+    repo_ref = RepoRef.from_slug(repo)
+    rows = connection.execute(
+        """
+        SELECT l.label
+        FROM pr_labels l
+        JOIN prs p ON p.id = l.pr_id
+        JOIN repos r ON r.id = p.repo_id
+        WHERE r.owner = ? AND r.name = ? AND p.number = ?
+        ORDER BY l.label ASC
+        """,
+        (repo_ref.owner, repo_ref.name, pr_number),
+    ).fetchall()
+    return [str(row["label"]) for row in rows]
+
+
+def get_repo_sync_status(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+) -> dict[str, Any]:
+    tracked = list_tracked_repos(connection, repo=repo)
+    if not tracked:
+        raise ValueError(f"Repository {repo} has not been synced yet")
+    return tracked[0]
 
 
 def get_pr_health(
@@ -268,18 +375,106 @@ def get_pr_health(
     )
 
 
-def get_reviewer_status(
+def get_pr_context_payload(
     connection: sqlite3.Connection,
     *,
     repo: str,
-    reviewer: str,
+    pr_number: int,
 ) -> dict[str, Any]:
-    threads = list_unresolved_threads(connection, repo=repo, author=reviewer)
-    blocking = [thread for thread in threads if thread["blocking"]]
+    health = get_pr_health(connection, repo=repo, pr_number=pr_number)
+    unresolved_threads = [
+        thread
+        for thread in list_unresolved_threads(connection, repo=repo)
+        if thread["pr_number"] == pr_number
+    ]
     return {
         "repo": repo,
-        "reviewer": reviewer.lstrip("@"),
+        "pr_number": pr_number,
+        "health": health.model_dump(mode="json"),
+        "decisions": get_pr_decisions(connection, repo=repo, pr_number=pr_number),
+        "unresolved_threads": unresolved_threads,
+        "labels": get_pr_labels(connection, repo=repo, pr_number=pr_number),
+        "repo_status": get_repo_sync_status(connection, repo=repo),
+    }
+
+
+def get_dashboard_summary(
+    connection: sqlite3.Connection,
+    *,
+    repo: str | None = None,
+    reviewer: str | None = None,
+    label: str | None = None,
+    stale_days: int = 7,
+) -> dict[str, Any]:
+    unresolved_threads = list_unresolved_threads(
+        connection,
+        repo=repo,
+        author=reviewer,
+        label=label,
+    )
+    stale_threads = [thread for thread in unresolved_threads if thread["age_days"] >= stale_days]
+    blocking_threads = [thread for thread in unresolved_threads if thread["blocking"]]
+    tracked_repos = list_tracked_repos(connection, repo=repo)
+
+    repo_breakdown = [
+        {
+            "repo": repo_row["repo"],
+            "open_prs": repo_row["open_prs"],
+            "unresolved_threads": repo_row["unresolved_threads"],
+            "blocking_threads": repo_row["blocking_threads"],
+            "last_synced_at": repo_row["last_synced_at"],
+        }
+        for repo_row in tracked_repos
+    ]
+
+    reviewer_counter = Counter(
+        thread["reviewer"] for thread in unresolved_threads if thread["reviewer"] != "unknown"
+    )
+    blocking_counter = Counter(
+        thread["reviewer"] for thread in blocking_threads if thread["reviewer"] != "unknown"
+    )
+    reviewer_load = [
+        {
+            "reviewer": reviewer_name,
+            "unresolved_threads": count,
+            "blocking_threads": blocking_counter.get(reviewer_name, 0),
+        }
+        for reviewer_name, count in reviewer_counter.most_common()
+    ]
+
+    return {
+        "repo": repo,
+        "reviewer": reviewer.lstrip("@") if reviewer else None,
+        "repos_tracked": len(tracked_repos),
+        "open_prs": _count_open_prs(connection, repo=repo),
+        "unresolved_threads": len(unresolved_threads),
+        "blocking_threads": len(blocking_threads),
+        "stale_threads": len(stale_threads),
+        "stale_days": stale_days,
+        "repo_breakdown": repo_breakdown,
+        "reviewer_load": reviewer_load,
+    }
+
+
+def get_reviewer_status(
+    connection: sqlite3.Connection,
+    *,
+    repo: str | None = None,
+    reviewer: str,
+) -> dict[str, Any]:
+    normalized_reviewer = reviewer.lstrip("@")
+    threads = list_unresolved_threads(connection, repo=repo, author=normalized_reviewer)
+    blocking = [thread for thread in threads if thread["blocking"]]
+    pending = [thread for thread in threads if thread["reviewer_state"] == "WAITING_ON_REVIEWER"]
+    waiting_on_author = [
+        thread for thread in threads if thread["reviewer_state"] == "PENDING_AUTHOR"
+    ]
+    return {
+        "repo": repo or "all",
+        "reviewer": normalized_reviewer,
         "unresolved_threads": len(threads),
         "blocking_threads": len(blocking),
+        "pending_threads": len(pending),
+        "waiting_on_author_threads": len(waiting_on_author),
         "threads": threads,
     }
