@@ -1,3 +1,10 @@
+"""Shared Pydantic models and domain types for oss-context.
+
+This module defines repository references, pull-request review entities,
+decision extraction results, sync reports, and health-summary structures shared
+across the rest of the codebase.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime

@@ -1,3 +1,10 @@
+"""GitHub API client logic for oss-context.
+
+This module handles REST and GraphQL requests, retries, rate-limit handling,
+pagination, and translation of GitHub pull-request review data into local
+Pydantic models used by the sync pipeline.
+"""
+
 from __future__ import annotations
 
 import asyncio

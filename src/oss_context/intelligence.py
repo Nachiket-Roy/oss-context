@@ -1,3 +1,10 @@
+"""Decision extraction orchestration for synced review comments.
+
+This module finds comments that still need analysis, batches them through the
+configured classifier, updates cached extraction state, and records decision
+history in SQLite.
+"""
+
 from __future__ import annotations
 
 import hashlib

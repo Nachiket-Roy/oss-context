@@ -1,3 +1,6 @@
+# Packaging and developer tooling configuration for oss-context.
+# This file defines runtime dependencies, dev-only tools, test behavior, and
+# the CLI entrypoint used by contributors and CI.
 [build-system]
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"

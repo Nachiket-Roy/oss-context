@@ -1,4 +1,6 @@
 {
+  // Pyright configuration for local development and CI.
+  // Keeping `src` on the import path makes local checks match installed usage.
   "include": ["src", "tests"],
-  "extraPaths": ["src"]
+  "extraPaths": ["src"],
 }

@@ -1,3 +1,9 @@
+"""Tests for comment-analysis orchestration and guardrails.
+
+This file checks the intelligence layer's validation behavior so invalid batch
+sizes fail fast before any classifier work begins.
+"""
+
 import pytest
 
 from oss_context.db import DatabaseManager

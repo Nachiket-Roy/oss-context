@@ -1,3 +1,10 @@
+"""SQLite schema and connection helpers for oss-context.
+
+This module owns database initialization, schema creation, and connection
+settings such as WAL mode so sync and query operations share the same storage
+behavior.
+"""
+
 from __future__ import annotations
 
 import sqlite3

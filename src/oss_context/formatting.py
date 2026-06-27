@@ -1,3 +1,9 @@
+"""Rich terminal rendering helpers for oss-context output.
+
+This module turns sync reports, unresolved thread lists, extracted decisions,
+and PR health summaries into readable tables and panels for CLI users.
+"""
+
 from __future__ import annotations
 
 from rich.console import Group

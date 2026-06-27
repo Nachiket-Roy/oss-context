@@ -24,6 +24,11 @@ Not yet implemented:
 
 ## Installation
 
+This README is the primary user and contributor guide for the repository.
+It explains setup, configuration, and the local workflow for running the same
+checks enforced by CI.
+
+
 Requires Python 3.12 or newer.
 
 ### With `uv`
@@ -77,6 +82,23 @@ oss-context query --repo owner/repo --pr 42 --decisions
 
 # Show PR health and reviewer state
 oss-context query --repo owner/repo --pr 42 --health
+```
+
+## Running the CI checks locally
+
+Use the same commands as the GitHub Actions workflow:
+
+```bash
+uv sync --extra dev
+uv run ruff check .
+uv run pyright
+uv run pytest
+```
+
+Or run them as a single command:
+
+```bash
+uv sync --extra dev && uv run ruff check . && uv run pyright && uv run pytest
 ```
 
 ## Notes

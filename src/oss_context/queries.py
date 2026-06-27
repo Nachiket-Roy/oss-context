@@ -1,3 +1,10 @@
+"""SQLite query helpers for unresolved state and PR summaries.
+
+This module assembles the higher-level read views used by the CLI, including
+unresolved review threads, decision timelines, reviewer status, and PR health
+scoring derived from the synced local graph.
+"""
+
 from __future__ import annotations
 
 import sqlite3

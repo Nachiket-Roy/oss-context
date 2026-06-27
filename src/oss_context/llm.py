@@ -1,3 +1,10 @@
+"""LLM-backed and heuristic decision classification helpers.
+
+This module classifies pull-request review comments into queryable decision
+states and provides a deterministic fallback when no remote provider is
+configured.
+"""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,9 @@
+"""Tests for heuristic review-comment classification.
+
+This file exercises the deterministic fallback classifier so common approval,
+question, and suggestion patterns stay stable without remote LLM access.
+"""
+
 from oss_context.llm import heuristic_extract
 
 

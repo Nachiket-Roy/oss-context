@@ -1,3 +1,10 @@
+"""Environment-driven configuration loading for oss-context.
+
+This module resolves database paths, GitHub settings, and LLM provider
+configuration so the rest of the application can rely on a validated Settings
+object.
+"""
+
 from __future__ import annotations
 
 import os

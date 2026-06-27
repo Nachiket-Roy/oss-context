@@ -1,3 +1,10 @@
+"""Repository sync pipeline for oss-context.
+
+This module pulls GitHub pull-request data into SQLite, upserts repository
+state, persists review threads and comments, and optionally triggers decision
+extraction after the sync completes.
+"""
+
 from __future__ import annotations
 
 import sqlite3

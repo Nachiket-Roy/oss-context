@@ -1,3 +1,9 @@
+"""Tests for shared model validation helpers.
+
+This file focuses on repository slug parsing so malformed CLI and query inputs
+are rejected before they reach deeper sync or database code.
+"""
+
 import pytest
 
 from oss_context.models import RepoRef

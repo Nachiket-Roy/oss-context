@@ -1,3 +1,9 @@
+"""Tests for environment-driven settings resolution.
+
+This file verifies provider validation, credential requirements, and default
+heuristic behavior so configuration mistakes fail early and predictably.
+"""
+
 from pathlib import Path
 
 import pytest

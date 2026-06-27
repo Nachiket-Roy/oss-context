@@ -1,3 +1,6 @@
+# Continuous integration workflow for oss-context.
+# This workflow reproduces the local quality gates: install, lint, type-check,
+# and run the test suite on every push and pull request.
 name: CI
 
 on:

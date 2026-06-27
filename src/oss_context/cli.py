@@ -1,3 +1,10 @@
+"""Command-line interface for oss-context.
+
+This module defines the Typer commands used to sync GitHub pull-request data,
+query the local SQLite knowledge graph, and reserve a future `serve` entrypoint
+for IDE and MCP integration.
+"""
+
 from __future__ import annotations
 
 import asyncio

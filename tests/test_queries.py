@@ -1,3 +1,10 @@
+"""Tests for SQLite-backed query behavior.
+
+This file seeds a local temporary database and verifies unresolved-thread,
+health-score, and latest-comment decision behavior across representative PR
+review scenarios.
+"""
+
 from datetime import UTC, datetime, timedelta
 
 from oss_context.db import DatabaseManager
