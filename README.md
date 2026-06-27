@@ -2,22 +2,7 @@
 
 `oss-context` tracks pull request review decisions and reviewer state across GitHub PRs using a local SQLite knowledge graph.
 
-This repository now contains the core foundation for local sync, review intelligence, IDE integration, and dashboard workflows:
-
-- GitHub sync into SQLite with incremental PR discovery
-- Review thread + comment persistence
-- Decision extraction with LLM providers or heuristic fallback
-- Query-oriented CLI with rich terminal output
-- MCP server integration for IDE and agent workflows
-- Cross-repo dashboard and reviewer-load queries
-- Basic CI for linting and tests
-
 ## Installation
-
-This README is the primary user and contributor guide for the repository.
-It explains setup, configuration, and the local workflow for running the same
-checks enforced by CI.
-
 
 Requires Python 3.12 or newer.
 
