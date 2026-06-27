@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import Any
 
-from oss_context.models import PRHealthSummary
+from oss_context.models import PRHealthSummary, RepoRef
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -65,33 +65,20 @@ def _base_thread_query() -> str:
             ORDER BY rc.created_at DESC, rc.id DESC
             LIMIT 1
         ) AS last_comment_at,
-        (
-            SELECT cache.decision_type
-            FROM review_comments rc
-            LEFT JOIN llm_cache cache ON cache.comment_id = rc.id
-            WHERE rc.thread_id = t.id AND cache.decision_type IS NOT NULL
-            ORDER BY cache.confidence DESC, rc.created_at DESC, rc.id DESC
-            LIMIT 1
-        ) AS decision_type,
-        (
-            SELECT cache.summary
-            FROM review_comments rc
-            LEFT JOIN llm_cache cache ON cache.comment_id = rc.id
-            WHERE rc.thread_id = t.id AND cache.summary IS NOT NULL
-            ORDER BY cache.confidence DESC, rc.created_at DESC, rc.id DESC
-            LIMIT 1
-        ) AS decision_summary,
-        (
-            SELECT cache.confidence
-            FROM review_comments rc
-            LEFT JOIN llm_cache cache ON cache.comment_id = rc.id
-            WHERE rc.thread_id = t.id AND cache.confidence IS NOT NULL
-            ORDER BY cache.confidence DESC, rc.created_at DESC, rc.id DESC
-            LIMIT 1
-        ) AS decision_confidence
+        latest_cache.decision_type AS decision_type,
+        latest_cache.summary AS decision_summary,
+        latest_cache.confidence AS decision_confidence
     FROM review_threads t
     JOIN prs p ON p.id = t.pr_id
     JOIN repos r ON r.id = p.repo_id
+    LEFT JOIN llm_cache latest_cache ON latest_cache.comment_id = (
+        SELECT rc.id
+        FROM review_comments rc
+        JOIN llm_cache cache ON cache.comment_id = rc.id
+        WHERE rc.thread_id = t.id
+        ORDER BY rc.created_at DESC, rc.id DESC
+        LIMIT 1
+    )
     """
 
 
@@ -140,9 +127,9 @@ def list_unresolved_threads(
     params: list[object] = []
 
     if repo:
-        owner, name = repo.split("/", maxsplit=1)
+        repo_ref = RepoRef.from_slug(repo)
         query += " AND r.owner = ? AND r.name = ?"
-        params.extend([owner, name])
+        params.extend([repo_ref.owner, repo_ref.name])
     if label:
         query += " AND EXISTS (SELECT 1 FROM pr_labels l WHERE l.pr_id = p.id AND l.label = ?)"
         params.append(label)
@@ -165,7 +152,7 @@ def get_pr_decisions(
     repo: str,
     pr_number: int,
 ) -> list[dict[str, Any]]:
-    owner, name = repo.split("/", maxsplit=1)
+    repo_ref = RepoRef.from_slug(repo)
     rows = connection.execute(
         """
         SELECT
@@ -186,7 +173,7 @@ def get_pr_decisions(
         WHERE r.owner = ? AND r.name = ? AND p.number = ? AND c.extracted_decision IS NOT NULL
         ORDER BY c.created_at ASC, c.id ASC
         """,
-        (owner, name, pr_number),
+        (repo_ref.owner, repo_ref.name, pr_number),
     ).fetchall()
 
     return [
@@ -210,7 +197,7 @@ def get_pr_health(
     repo: str,
     pr_number: int,
 ) -> PRHealthSummary:
-    owner, name = repo.split("/", maxsplit=1)
+    repo_ref = RepoRef.from_slug(repo)
     pr_row = connection.execute(
         """
         SELECT p.title, p.state, p.author, p.updated_at
@@ -218,7 +205,7 @@ def get_pr_health(
         JOIN repos r ON r.id = p.repo_id
         WHERE r.owner = ? AND r.name = ? AND p.number = ?
         """,
-        (owner, name, pr_number),
+        (repo_ref.owner, repo_ref.name, pr_number),
     ).fetchone()
     if not pr_row:
         raise ValueError(f"PR #{pr_number} not found for {repo}")

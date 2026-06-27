@@ -24,6 +24,9 @@ async def analyze_pending_comments(
     repo_id: int | None = None,
     batch_size: int = 10,
 ) -> int:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than zero")
+
     where_clauses = ["TRIM(COALESCE(c.body, '')) != ''"]
     params: list[object] = []
     if repo_id is not None:
@@ -133,8 +136,8 @@ async def analyze_pending_comments(
                 connection.execute(
                     """
                     INSERT INTO decision_log(
-                        pr_id, comment_id, decision_type,
-                        extracted_summary, raw_text, raw_text_hash, extracted_at
+                        pr_id, comment_id, decision_type, extracted_summary,
+                        raw_text, raw_text_hash, extracted_at
                     )
                     VALUES(?, ?, ?, ?, ?, ?, ?)
                     """,

@@ -24,20 +24,24 @@ Not yet implemented:
 
 ## Installation
 
+Requires Python 3.12 or newer.
+
 ### With `uv`
 
 ```bash
 uv sync --extra dev
 uv run oss-context --help
+uv run pyright
 ```
 
 ### With `pip`
 
 ```bash
-python -m venv .venv
+python3.12 -m venv .venv
 . .venv/bin/activate
 pip install -e '.[dev]'
 oss-context --help
+pyright
 ```
 
 ## Environment variables

@@ -207,6 +207,9 @@ async def sync_repository(
     extract_decisions: bool = True,
     batch_size: int = 10,
 ) -> SyncReport:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than zero")
+
     repo = RepoRef.from_slug(repo_slug)
     report = SyncReport(repo=repo.slug, started_at=datetime.now(UTC))
     database = DatabaseManager(settings.db_path)
@@ -237,7 +240,7 @@ async def sync_repository(
 
         connection.execute(
             "UPDATE repos SET last_synced_at = ? WHERE id = ?",
-            (_iso(datetime.now(UTC)), repo_id),
+            (_iso(report.started_at), repo_id),
         )
         connection.commit()
 

@@ -15,6 +15,9 @@ class GitHubApiError(RuntimeError):
     pass
 
 
+GraphQLPayload = dict[str, Any]
+
+
 def parse_github_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -81,24 +84,91 @@ class GitHubClient:
 
         raise GitHubApiError("GitHub API request failed") from last_error
 
-    async def _graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
-        headers = {"Content-Type": "application/json"}
-        if self.settings.github_token:
-            headers["Authorization"] = f"Bearer {self.settings.github_token}"
-
-        async with httpx.AsyncClient(
-            timeout=self.settings.request_timeout_seconds, headers=headers
-        ) as client:
-            response = await client.post(
-                self.settings.github_graphql_url,
-                json={"query": query, "variables": variables},
-            )
-            response.raise_for_status()
-
+    async def _graphql(self, query: str, variables: GraphQLPayload) -> GraphQLPayload:
+        response = await self._request(
+            "POST",
+            self.settings.github_graphql_url,
+            headers={"Content-Type": "application/json"},
+            json={"query": query, "variables": variables},
+        )
         payload = response.json()
         if payload.get("errors"):
             raise GitHubApiError(f"GitHub GraphQL error: {payload['errors']}")
         return payload["data"]
+
+    def _parse_review_comment(self, comment: GraphQLPayload) -> ReviewCommentData | None:
+        database_id = comment.get("databaseId")
+        if database_id is None:
+            return None
+
+        reaction_groups = comment.get("reactionGroups") or []
+        reaction_count = sum(
+            ((group.get("users") or {}).get("totalCount") or 0) for group in reaction_groups
+        )
+        body = comment.get("body") or ""
+        return ReviewCommentData(
+            github_comment_id=int(database_id),
+            author=(comment.get("author") or {}).get("login"),
+            body=body,
+            created_at=parse_github_datetime(comment.get("createdAt")),
+            updated_at=parse_github_datetime(comment.get("updatedAt")),
+            reaction_count=reaction_count,
+            is_suggestion="```suggestion" in body,
+            suggestion_applied=False,
+        )
+
+    async def _fetch_remaining_thread_comments(
+        self,
+        thread_id: str,
+        start_cursor: str,
+    ) -> list[ReviewCommentData]:
+        query = """
+        query ReviewThreadComments($threadId: ID!, $cursor: String) {
+          node(id: $threadId) {
+            ... on PullRequestReviewThread {
+              comments(first: 100, after: $cursor) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                nodes {
+                  databaseId
+                  author {
+                    login
+                  }
+                  body
+                  createdAt
+                  updatedAt
+                  reactionGroups {
+                    users {
+                      totalCount
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+
+        comments: list[ReviewCommentData] = []
+        cursor: str | None = start_cursor
+
+        while True:
+            data = await self._graphql(query, {"threadId": thread_id, "cursor": cursor})
+            node = data.get("node") or {}
+            comments_connection = node.get("comments") or {}
+            for comment_node in comments_connection.get("nodes") or []:
+                parsed = self._parse_review_comment(comment_node)
+                if parsed is not None:
+                    comments.append(parsed)
+
+            page_info = comments_connection.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
+
+        return comments
 
     async def get_repo(self, repo: RepoRef) -> dict[str, Any]:
         response = await self._request("GET", f"/repos/{repo.owner}/{repo.name}")
@@ -170,6 +240,10 @@ class GitHubClient:
                   createdAt
                   updatedAt
                   comments(first: 100) {
+                    pageInfo {
+                      hasNextPage
+                      endCursor
+                    }
                     nodes {
                       databaseId
                       author {
@@ -216,27 +290,19 @@ class GitHubClient:
                 elif node.get("isResolved"):
                     state = "resolved"
 
+                comments_connection = node.get("comments") or {}
                 comments: list[ReviewCommentData] = []
-                for comment in (node.get("comments") or {}).get("nodes") or []:
-                    database_id = comment.get("databaseId")
-                    if database_id is None:
-                        continue
-                    reaction_groups = comment.get("reactionGroups") or []
-                    reaction_count = sum(
-                        ((group.get("users") or {}).get("totalCount") or 0)
-                        for group in reaction_groups
-                    )
-                    body = comment.get("body") or ""
-                    comments.append(
-                        ReviewCommentData(
-                            github_comment_id=int(database_id),
-                            author=(comment.get("author") or {}).get("login"),
-                            body=body,
-                            created_at=parse_github_datetime(comment.get("createdAt")),
-                            updated_at=parse_github_datetime(comment.get("updatedAt")),
-                            reaction_count=reaction_count,
-                            is_suggestion="```suggestion" in body,
-                            suggestion_applied=False,
+                for comment_node in comments_connection.get("nodes") or []:
+                    parsed = self._parse_review_comment(comment_node)
+                    if parsed is not None:
+                        comments.append(parsed)
+
+                comments_page_info = comments_connection.get("pageInfo") or {}
+                if comments_page_info.get("hasNextPage"):
+                    comments.extend(
+                        await self._fetch_remaining_thread_comments(
+                            node["id"],
+                            comments_page_info["endCursor"],
                         )
                     )
 

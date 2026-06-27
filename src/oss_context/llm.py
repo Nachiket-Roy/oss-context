@@ -160,6 +160,10 @@ class LLMClassifier:
         self,
         comments: list[CommentForAnalysis],
     ) -> dict[int, DecisionExtraction]:
+        api_key = self.settings.llm_api_key
+        if api_key is None:
+            raise RuntimeError("OpenAI provider selected without an API key")
+
         payload = {
             "model": self.settings.llm_model,
             "response_format": {"type": "json_object"},
@@ -190,7 +194,7 @@ class LLMClassifier:
             response = await client.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {self.settings.llm_api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json=payload,
@@ -205,6 +209,10 @@ class LLMClassifier:
         self,
         comments: list[CommentForAnalysis],
     ) -> dict[int, DecisionExtraction]:
+        api_key = self.settings.llm_api_key
+        if api_key is None:
+            raise RuntimeError("Anthropic provider selected without an API key")
+
         payload = {
             "model": self.settings.llm_model,
             "max_tokens": 1200,
@@ -235,7 +243,7 @@ class LLMClassifier:
             response = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
-                    "x-api-key": self.settings.llm_api_key,
+                    "x-api-key": api_key,
                     "anthropic-version": "2023-06-01",
                     "content-type": "application/json",
                 },

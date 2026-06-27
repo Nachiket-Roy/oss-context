@@ -30,12 +30,15 @@ def _default_db_path() -> Path:
 
 def _auto_provider() -> LLMProvider:
     explicit = os.getenv("OSS_CONTEXT_LLM_PROVIDER")
-    if explicit == "heuristic":
-        return "heuristic"
-    if explicit == "openai":
-        return "openai"
-    if explicit == "anthropic":
-        return "anthropic"
+    if explicit is not None:
+        normalized = explicit.strip().lower()
+        if normalized == "heuristic":
+            return "heuristic"
+        if normalized == "openai":
+            return "openai"
+        if normalized == "anthropic":
+            return "anthropic"
+        raise ValueError("OSS_CONTEXT_LLM_PROVIDER must be one of: heuristic, openai, anthropic")
     if os.getenv("OPENAI_API_KEY"):
         return "openai"
     if os.getenv("ANTHROPIC_API_KEY"):
@@ -59,6 +62,12 @@ def load_settings(db_path: Path | None = None) -> Settings:
             api_key = os.getenv("OPENAI_API_KEY")
         elif provider == "anthropic":
             api_key = os.getenv("ANTHROPIC_API_KEY")
+
+    if provider in {"openai", "anthropic"} and not api_key:
+        raise ValueError(
+            f"{provider} provider selected but no API key was configured. "
+            + "Set OSS_CONTEXT_LLM_API_KEY or the provider-specific API key env var."
+        )
 
     resolved_db_path = db_path or Path(os.getenv("OSS_CONTEXT_DB_PATH", _default_db_path()))
     return Settings(

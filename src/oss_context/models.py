@@ -24,7 +24,7 @@ class RepoRef(BaseModel):
 
     @classmethod
     def from_slug(cls, value: str) -> RepoRef:
-        parts = value.split("/", maxsplit=1)
+        parts = [segment.strip() for segment in value.split("/")]
         if len(parts) != 2 or not all(parts):
             raise ValueError("Repository must be in owner/name form.")
         return cls(owner=parts[0], name=parts[1])
