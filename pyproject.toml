@@ -33,6 +33,7 @@ dev = [
 
 [project.scripts]
 oss-context = "oss_context.cli:app"
+ossc = "oss_context.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/oss_context"]

@@ -38,6 +38,7 @@ Requires Python 3.12 or newer.
 ```bash
 uv sync --extra dev
 uv run oss-context --help
+uv run ossc --help
 uv run pyright
 ```
 
@@ -48,6 +49,7 @@ python3.12 -m venv .venv
 . .venv/bin/activate
 pip install -e '.[dev]'
 oss-context --help
+ossc --help
 pyright
 ```
 
@@ -67,11 +69,13 @@ pyright
 
 If no LLM provider is configured, `oss-context` falls back to a deterministic heuristic classifier so review classification remains usable without secrets.
 
+The canonical command name is `oss-context`, and a short alias `ossc` is also installed.
+
 ## CLI examples
 
 ```bash
 # Sync a repository into the local knowledge graph
-oss-context sync owner/repo
+ossc sync owner/repo
 
 # Show unresolved threads across all synced repositories
 oss-context query --unresolved
