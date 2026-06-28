@@ -25,11 +25,22 @@ from oss_context.review_assistant import get_merge_readiness_payload
 from oss_context.settings import Settings
 
 CSS = """
+:root {
+  --bg-color: #0c0e12;
+  --surface-color: #141721;
+  --border-color: #1e2230;
+  --text-primary: #f3f4f6;
+  --text-muted: #9ca3af;
+  --blue: #3b82f6;
+  --green: #10b981;
+  --red: #ef4444;
+  --yellow: #f59e0b;
+}
 body {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   margin: 0;
-  background: #0b1020;
-  color: #e5e7eb;
+  background: var(--bg-color);
+  color: var(--text-primary);
 }
 header, main {
   max-width: 1100px;
@@ -38,61 +49,104 @@ header, main {
 }
 header {
   padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
 }
 a {
-  color: #93c5fd;
+  color: var(--blue);
   text-decoration: none;
+  transition: color 0.2s;
 }
 a:hover {
+  color: #60a5fa;
   text-decoration: underline;
 }
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin: 16px 0 24px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin: 16px 0 28px;
 }
 .card {
-  background: #111827;
-  border: 1px solid #1f2937;
-  border-radius: 12px;
-  padding: 16px;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+.card-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 .metric {
-  font-size: 1.8rem;
+  font-size: 2rem;
   font-weight: 700;
-  margin-top: 6px;
+  margin-top: 8px;
+  color: #ffffff;
+}
+.metric.blue { color: var(--blue); }
+.metric.green { color: var(--green); }
+.metric.red { color: var(--red); }
+.progress-container {
+  height: 4px;
+  background: #272a37;
+  border-radius: 2px;
+  margin-top: 12px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  border-radius: 2px;
+}
+.progress-bar.green {
+  background: var(--green);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
 }
 section {
-  margin: 24px 0;
+  margin: 28px 0;
 }
 table {
   width: 100%;
   border-collapse: collapse;
-  background: #111827;
-  border-radius: 12px;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
   overflow: hidden;
 }
 th, td {
   text-align: left;
-  padding: 10px 12px;
-  border-bottom: 1px solid #1f2937;
-  vertical-align: top;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
 }
 th {
-  background: #0f172a;
+  background: #0f1118;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 code {
-  background: #111827;
+  background: rgba(255, 255, 255, 0.05);
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: 4px;
+  font-family: monospace;
 }
 pre {
   white-space: pre-wrap;
-  background: #111827;
-  border: 1px solid #1f2937;
-  border-radius: 12px;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
   padding: 16px;
+  color: #d1d5db;
 }
 form.filters {
   display: flex;
@@ -105,37 +159,78 @@ label {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
+  color: var(--text-muted);
 }
 input {
-  background: #111827;
-  color: #e5e7eb;
-  border: 1px solid #374151;
-  border-radius: 8px;
-  padding: 8px 10px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  transition: border-color 0.2s;
+}
+input:focus {
+  outline: none;
+  border-color: var(--blue);
 }
 button {
-  background: #2563eb;
+  background: var(--blue);
   color: white;
   border: 0;
-  border-radius: 8px;
-  padding: 10px 14px;
+  border-radius: 6px;
+  padding: 10px 16px;
   cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: opacity 0.2s;
+}
+button:hover {
+  opacity: 0.9;
 }
 .muted {
-  color: #94a3b8;
+  color: var(--text-muted);
 }
 .error {
   color: #fca5a5;
 }
+nav {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+nav a:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+  text-decoration: none;
+}
+nav a.active {
+  color: var(--blue);
+  background: rgba(59, 130, 246, 0.1);
+  font-weight: 600;
+  text-decoration: none;
+}
 """
 
 
-def _page(title: str, body: str) -> str:
+def _page(title: str, body: str, active_tab: str = "dashboard") -> str:
     """Wrap a page body in a consistent HTML shell."""
+    is_db = "active" if active_tab == "dashboard" else ""
+    is_sr = "active" if active_tab == "search" else ""
     nav = (
-        '<nav><a href="/">Dashboard</a> · <a href="/code/search">Code search</a> '
-        '<span class="muted">· local-only UI backed by SQLite</span></nav>'
+        f'<nav>'
+        f'<a href="/" class="{is_db}">Dashboard</a>'
+        f'<a href="/code/search" class="{is_sr}">Code search</a>'
+        f'</nav>'
     )
     return (
         "<!doctype html>"
@@ -692,7 +787,7 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                         label=label,
                         stale_days=stale_days,
                     )
-                    self._send_html(_page(title, body))
+                    self._send_html(_page(title, body, active_tab="dashboard"))
                     return
 
                 if len(parts) == 2 and parts[0] == "code" and parts[1] == "search":
@@ -706,7 +801,7 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                         repo=repo,
                         branch=branch,
                     )
-                    self._send_html(_page(title, body))
+                    self._send_html(_page(title, body, active_tab="search"))
                     return
 
                 if len(parts) == 4 and parts[0] == "repo" and parts[3] == "issues":
@@ -719,7 +814,7 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                         state=state,
                         label=label,
                     )
-                    self._send_html(_page(title, body))
+                    self._send_html(_page(title, body, active_tab="dashboard"))
                     return
 
                 if len(parts) == 4 and parts[0] == "repo" and parts[3] == "file":
@@ -737,7 +832,7 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                             branch=branch,
                         )
                     )
-                    self._send_html(_page(title, body))
+                    self._send_html(_page(title, body, active_tab="dashboard"))
                     return
 
                 if len(parts) == 3 and parts[0] == "repo":
@@ -750,7 +845,7 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                         label=label,
                         stale_days=stale_days,
                     )
-                    self._send_html(_page(title, body))
+                    self._send_html(_page(title, body, active_tab="dashboard"))
                     return
 
                 if len(parts) == 5 and parts[0] == "pr" and parts[4] == "ready":
@@ -763,15 +858,29 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                         stale_days=stale_days,
                     )
                     title = f"Merge readiness · PR #{pr_number} · {repo}"
-                    self._send_html(_page(title, _render_merge_readiness_body(payload)))
+                    self._send_html(
+                        _page(
+                            title,
+                            _render_merge_readiness_body(payload),
+                            active_tab="dashboard",
+                        )
+                    )
                     return
 
                 if len(parts) == 4 and parts[0] == "pr":
                     repo = f"{parts[1]}/{parts[2]}"
                     pr_number = int(parts[3])
-                    payload = get_pr_context_payload(connection, repo=repo, pr_number=pr_number)
+                    payload = get_pr_context_payload(
+                        connection, repo=repo, pr_number=pr_number
+                    )
                     title = f"PR #{pr_number} · {repo}"
-                    self._send_html(_page(title, _render_pr_body(payload)))
+                    self._send_html(
+                        _page(
+                            title,
+                            _render_pr_body(payload),
+                            active_tab="dashboard",
+                        )
+                    )
                     return
 
                 if len(parts) == 4 and parts[0] == "issue":
@@ -783,7 +892,13 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                         issue_number=issue_number,
                     )
                     title = f"Issue #{issue_number} · {repo}"
-                    self._send_html(_page(title, _render_issue_body(payload)))
+                    self._send_html(
+                        _page(
+                            title,
+                            _render_issue_body(payload),
+                            active_tab="dashboard",
+                        )
+                    )
                     return
 
                 self._send_html(
