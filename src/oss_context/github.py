@@ -404,14 +404,11 @@ class GitHubClient:
                   id
                   isResolved
                   isOutdated
-                  resolvedAt
                   resolvedBy {
                     login
                   }
                   path
                   line
-                  createdAt
-                  updatedAt
                   comments(first: 100) {
                     pageInfo {
                       hasNextPage
@@ -482,6 +479,18 @@ class GitHubClient:
                         )
                     )
 
+                if comments:
+                    
+                    valid_created = [x for x in [c.created_at for c in comments] if x is not None]
+                    valid_updated = [x for x in [c.updated_at or c.created_at for c in comments] if x is not None]  # noqa: E501
+                    thread_created_at = min(valid_created) if valid_created else None
+                    thread_updated_at = max(valid_updated) if valid_updated else None
+                else:
+                    thread_created_at = None
+                    thread_updated_at = None
+                
+                thread_resolved_at = thread_updated_at if state == "resolved" else None
+
                 threads.append(
                     ReviewThreadData(
                         github_thread_id=node["id"],
@@ -489,9 +498,9 @@ class GitHubClient:
                         line_number=node.get("line"),
                         thread_state=state,
                         resolved_by=(node.get("resolvedBy") or {}).get("login"),
-                        resolved_at=parse_github_datetime(node.get("resolvedAt")),
-                        created_at=parse_github_datetime(node.get("createdAt")),
-                        updated_at=parse_github_datetime(node.get("updatedAt")),
+                        resolved_at=thread_resolved_at,
+                        created_at=thread_created_at,
+                        updated_at=thread_updated_at,
                         comments=comments,
                     )
                 )

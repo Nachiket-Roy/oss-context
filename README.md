@@ -61,6 +61,12 @@ oss-context query --repo owner/repo --unresolved
 # Show extracted decisions for a specific PR
 oss-context query --repo owner/repo --pr 42 --decisions
 
+# Show the accepted architectural design and ADR-lites for a PR
+oss-context query --repo owner/repo --pr 42 --design
+
+# Show causal rationale links (e.g., "Decision X supports Feature Y") for a PR
+oss-context query --repo owner/repo --pr 42 --rationale
+
 # Show full PR context, including linked references
 oss-context query --repo owner/repo --pr 42 --context
 
@@ -88,6 +94,9 @@ oss-context branch current-pr
 # Show branch-aware PR context for the current worktree
 oss-context branch context
 
+# Show architectural design memory for the current branch's PR
+oss-context branch design
+
 # Explain why branch/file context was returned and the confidence level
 oss-context branch file-context src/auth.py --explain
 
@@ -100,6 +109,9 @@ oss-context code index
 # Search symbols and inspect file-level code + review context
 oss-context code search check_token
 oss-context code context src/auth.py --explain
+
+# Explain why a file looks the way it does using architectural memory
+oss-context code why src/auth.py
 
 # Show direct callers/callees and impacted files for a symbol
 oss-context code callers check_token
@@ -166,6 +178,8 @@ Exposed MCP tools include:
 - `get_impacted_files_tool`
 - `get_file_context`
 - `get_merge_readiness`
+- `get_design_summary`
+- `explain_implementation`
 
 Exposed MCP resources include:
 
@@ -176,6 +190,9 @@ Exposed MCP resources include:
 - `pr://dashboard/overview`
 - `pr://{owner}/{name}/{pr_number}/merge-readiness`
 - `pr://reviewer/{reviewer}/status`
+- `pr://{owner}/{name}/{pr_number}/design`
+- `issue://{owner}/{name}/{issue_number}/design`
+- `code://{owner}/{name}/why/{path}`
 
 ## Running the CI checks locally
 
@@ -210,3 +227,4 @@ uv sync --extra dev && uv run ruff check . && uv run pyright && uv run pytest
 - Retrieval explanations expose provenance, confidence, and the exact reason a file/thread/reference was shown.
 - `oss-context doctor retrieval` checks for stale branch mappings, missing indexes, outdated code snapshots, and orphaned file references.
 - Semantic retrieval is intentionally not part of the default path; current branch/file context stays deterministic.
+- Architectural memory (ADR-lites, design summaries, implementation explanations) runs lazily using the LLM and is cached permanently.

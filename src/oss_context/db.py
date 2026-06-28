@@ -119,6 +119,47 @@ CREATE TABLE IF NOT EXISTS extracted_references (
     target_sha TEXT
 );
 
+CREATE TABLE IF NOT EXISTS architectural_decisions (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    pr_id INTEGER REFERENCES prs(id),
+    issue_id INTEGER REFERENCES issues(id),
+    summary TEXT NOT NULL,
+    rationale TEXT,
+    alternatives TEXT,
+    outcome TEXT,
+    created_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS design_summaries (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    target_type TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    summary TEXT NOT NULL,
+    generated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS implementation_summaries (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    target_type TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    generated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rationale_links (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    source_type TEXT NOT NULL,
+    source_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    relationship TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS llm_cache (
     comment_id INTEGER PRIMARY KEY REFERENCES review_comments(id),
     provider TEXT NOT NULL,
@@ -198,6 +239,10 @@ CREATE INDEX IF NOT EXISTS idx_refs_source ON extracted_references(source_kind, 
 CREATE INDEX IF NOT EXISTS idx_refs_target ON extracted_references(
     target_repo, target_number, reference_kind
 );
+CREATE INDEX IF NOT EXISTS idx_adr_repo ON architectural_decisions(repo_id);
+CREATE INDEX IF NOT EXISTS idx_design_target ON design_summaries(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_impl_target ON implementation_summaries(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_rationale_source ON rationale_links(source_type, source_id);
 """
 
 
@@ -217,5 +262,102 @@ class DatabaseManager:
     def initialize(self) -> sqlite3.Connection:
         connection = self.connect()
         connection.executescript(SCHEMA)
+        
+        # Migrations
+        try:
+            connection.execute("ALTER TABLE decision_log ADD COLUMN decision_status TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+        try:
+            connection.execute("ALTER TABLE decision_log ADD COLUMN decision_reason TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+                
+        # Phase 6 migrations for adding repo_id to caches with strict constraints
+        for table in ["design_summaries", "implementation_summaries", "rationale_links"]:
+            cursor = connection.execute(f"PRAGMA table_info({table})")
+            columns = {row["name"]: row for row in cursor.fetchall()}
+            
+            needs_rebuild = False
+            if "repo_id" not in columns:
+                needs_rebuild = True
+            elif not columns["repo_id"]["notnull"]:
+                needs_rebuild = True
+                
+            if needs_rebuild:
+                # Disable foreign keys for the rebuild
+                # Must be outside transaction
+                connection.commit()
+                connection.execute("PRAGMA foreign_keys = OFF;")
+                try:
+                    # Rename old table
+                    connection.execute(f"ALTER TABLE {table} RENAME TO {table}_old")
+                    
+                    # Recreate with new strict schema
+                    connection.executescript(SCHEMA)
+                    
+                    # Backfill data from old table, attempting to guess repo_id if missing.
+                    # If we can't safely resolve repo_id (e.g. multiple repos have PR #42), we discard the cache row.  # noqa: E501
+                    
+                    # Try to map target_id (PR/Issue number) to a single repo_id
+                    if table in ("design_summaries", "implementation_summaries"):
+                        connection.execute(f"""
+                            INSERT INTO {table} (
+                                id, repo_id, target_type, target_id, summary, generated_at
+                                {', file_path' if table == 'implementation_summaries' else ''}
+                            )
+                            SELECT o.id, 
+                                   COALESCE(
+                                       (SELECT repo_id FROM prs 
+                                        WHERE number = o.target_id 
+                                          AND o.target_type = 'pr' LIMIT 1),
+                                       (SELECT repo_id FROM issues 
+                                        WHERE number = o.target_id 
+                                          AND o.target_type = 'issue' LIMIT 1)
+                                   ),
+                                   o.target_type, o.target_id, o.summary, o.generated_at
+                                   {', o.file_path' if table == 'implementation_summaries' else ''}
+                            FROM {table}_old o
+                            WHERE (SELECT count(repo_id) FROM prs 
+                                   WHERE number = o.target_id AND o.target_type = 'pr') = 1
+                               OR (SELECT count(repo_id) FROM issues 
+                                   WHERE number = o.target_id AND o.target_type = 'issue') = 1
+                        """)
+                    elif table == "rationale_links":
+                        connection.execute(f"""
+                            INSERT INTO {table} (
+                                id, repo_id, source_type, source_id, 
+                                target_type, target_id, relationship
+                            )
+                            SELECT o.id, 
+                                   COALESCE(
+                                       (SELECT repo_id FROM prs 
+                                        WHERE number = o.source_id 
+                                          AND o.source_type = 'design_summary' LIMIT 1),
+                                       (SELECT repo_id FROM issues 
+                                        WHERE number = o.source_id 
+                                          AND o.source_type = 'design_summary' LIMIT 1)
+                                   ),
+                                   o.source_type, o.source_id, o.target_type, o.target_id, 
+                                   o.relationship
+                            FROM {table}_old o
+                            WHERE (SELECT count(repo_id) FROM prs 
+                                   WHERE number = o.source_id 
+                                     AND o.source_type = 'design_summary') = 1
+                               OR (SELECT count(repo_id) FROM issues 
+                                   WHERE number = o.source_id 
+                                     AND o.source_type = 'design_summary') = 1
+                        """)
+                        
+                    connection.execute(f"DROP TABLE {table}_old")
+                finally:
+                    connection.commit()
+                    connection.execute("PRAGMA foreign_keys = ON;")
+                    
+        # Re-run schema to recreate indexes that were attached to {table}_old and dropped
+        connection.executescript(SCHEMA)
+            
         connection.commit()
         return connection

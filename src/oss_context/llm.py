@@ -20,6 +20,8 @@ Return one result per comment with these fields:
 - comment_id: integer
 - decision_type: one of APPROVE, REQUEST_CHANGES, QUESTION, SUGGESTION, ACKNOWLEDGMENT
 - summary: concise summary under 18 words
+- status: (optional) one of OPEN, RESOLVED, ACCEPTED, REJECTED, SUPERSEDED
+- reason: (optional) concise reasoning for the status if applicable
 - confidence: float between 0 and 1
 
 Interpretation rules:
@@ -28,6 +30,8 @@ Interpretation rules:
 - QUESTION: asks for explanation or clarification
 - SUGGESTION: optional improvement or code suggestion, not clearly blocking
 - ACKNOWLEDGMENT: thanks, noted, resolved, done, informational follow-up
+- Status should reflect the lifecycle stage of a decision. 
+  e.g. REJECTED if an alternative was chosen.
 """
 
 
@@ -187,6 +191,8 @@ class LLMClassifier:
                                         "comment_id": 1,
                                         "decision_type": "QUESTION",
                                         "summary": "Ask for clarification on edge case",
+                                        "status": "OPEN",
+                                        "reason": "Clarification not yet provided",
                                         "confidence": 0.7,
                                     }
                                 ]
@@ -236,6 +242,8 @@ class LLMClassifier:
                                         "comment_id": 1,
                                         "decision_type": "QUESTION",
                                         "summary": "Ask for clarification on edge case",
+                                        "status": "OPEN",
+                                        "reason": "Clarification not yet provided",
                                         "confidence": 0.7,
                                     }
                                 ]
@@ -279,13 +287,26 @@ class LLMClassifier:
         by_comment = {comment.comment_id: comment for comment in comments}
         extracted: dict[int, DecisionExtraction] = {}
 
+        valid_statuses = {"OPEN", "RESOLVED", "ACCEPTED", "REJECTED", "SUPERSEDED"}
         for item in results:
             comment_id = int(item["comment_id"])
             if comment_id not in by_comment:
                 continue
+                
+            raw_status = item.get("status")
+            norm_status = raw_status.upper() if isinstance(raw_status, str) else None
+            if norm_status not in valid_statuses:
+                norm_status = None
+            
+            from typing import cast
+
+            from oss_context.models import DecisionStatus
+            
             extracted[comment_id] = DecisionExtraction(
                 decision_type=item["decision_type"],
                 summary=_clean_summary(item["summary"]),
+                status=cast(DecisionStatus | None, norm_status),
+                reason=item.get("reason"),
                 confidence=float(item["confidence"]),
                 provider=provider,
                 model=self.settings.llm_model,

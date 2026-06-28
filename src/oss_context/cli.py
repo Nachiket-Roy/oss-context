@@ -13,6 +13,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
+from oss_context import architecture
 from oss_context.branch_context import (
     BranchContextError,
     get_branch_context_payload,
@@ -218,6 +219,8 @@ def query(
         False,
         help="Show full PR or issue context, including references.",
     ),
+    design: bool = typer.Option(False, help="Show architectural design memory."),
+    rationale: bool = typer.Option(False, help="Show rationale graph."),
     dashboard: bool = typer.Option(False, help="Show a cross-repo dashboard summary."),
     repos: bool = typer.Option(False, help="Show tracked repository sync status."),
     reviewer_status: bool = typer.Option(
@@ -259,10 +262,12 @@ def query(
         raise typer.BadParameter("--author/--reviewer is required with --reviewer-status")
     if context and pr is None and issue is None:
         raise typer.BadParameter("--context requires --pr or --issue")
-    if pr is not None and not (decisions or health or context):
-        raise typer.BadParameter("--pr requires --decisions, --health, or --context")
-    if issue is not None and not context and (dashboard or repos or reviewer_status):
-        raise typer.BadParameter("--issue requires --context when combined with other views")
+    if (design or rationale) and pr is None and issue is None:
+        raise typer.BadParameter("--design and --rationale require --pr or --issue")
+    if pr is not None and not (decisions or health or context or design or rationale):
+        raise typer.BadParameter("--pr requires --decisions, --health, --context, --design, or --rationale")  # noqa: E501
+    if issue is not None and not (context or design or rationale):
+        raise typer.BadParameter("--issue requires --context, --design, or --rationale")
 
     settings = _load_cli_settings(db_path)
     connection = DatabaseManager(settings.db_path).initialize()
@@ -314,6 +319,28 @@ def query(
                 console.print(render_issue_context(payload))
             else:
                 raise AssertionError("preflight validation should require --pr or --issue")
+                
+        if design or rationale:
+            import json
+            target_type = "pr" if pr is not None else "issue"
+            target_id = pr if pr is not None else issue
+            assert normalized_repo is not None
+            assert target_id is not None
+            # get repo_id
+            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", tuple(normalized_repo.split("/"))).fetchone()  # noqa: E501
+            if not repo_row:
+                console.print(f"Repository {normalized_repo} not found in database.")
+                raise typer.Exit(code=1)
+            
+            memory = asyncio.run(architecture.generate_architectural_memory(
+                connection, target_type, target_id, repo_row["id"]
+            ))
+            if design:
+                console.print("\n[bold cyan]Architectural Design Memory[/bold cyan]")
+                console.print(json.dumps({"design_summary": memory.get("design_summary"), "decisions": memory.get("decisions"), "implementation": memory.get("implementation")}, indent=2))  # noqa: E501
+            if rationale:
+                console.print("\n[bold cyan]Rationale Graph Links[/bold cyan]")
+                console.print(json.dumps(memory.get("rationale_links", []), indent=2))
 
         explicit_view_selected = any(
             [
@@ -321,6 +348,8 @@ def query(
                 decisions,
                 health,
                 context,
+                design,
+                rationale,
                 dashboard,
                 repos,
                 reviewer_status,
@@ -582,6 +611,34 @@ def branch_current_pr(
     finally:
         connection.close()
 
+@branch_app.command("design")
+def branch_design(
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Show architectural design memory for the current branch's PR."""
+    import json
+    settings = _load_cli_settings(db_path)
+    cwd = Path.cwd()
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        payload = resolve_branch_pr(connection, cwd=cwd)
+        repo_slug = payload["repo"]
+        pr_number = payload["pr_number"]
+        repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", tuple(repo_slug.split("/"))).fetchone()  # noqa: E501
+        if not repo_row:
+            console.print(f"Repository {repo_slug} not found.")
+            raise typer.Exit(code=1)
+        
+        memory = asyncio.run(architecture.generate_architectural_memory(
+            connection, "pr", pr_number, repo_row["id"]
+        ))
+        console.print(f"\n[bold cyan]Architectural Design Memory for {repo_slug}#{pr_number}[/bold cyan]")  # noqa: E501
+        console.print(json.dumps(memory, indent=2))
+    except BranchContextError as exc:
+        _fail_branch_command(exc)
+    finally:
+        connection.close()
+
 
 @branch_app.command()
 def context(
@@ -700,6 +757,35 @@ def link(
     finally:
         connection.close()
 
+@code_app.command("why")
+def code_why(
+    file_path: str = typer.Argument(..., help="File path to explain."),
+    repo: str | None = typer.Option(None, help="Repository in owner/name form."),
+    cwd: Path | None = typer.Option(None, help="Git working tree."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Explain why a file looks the way it does using architectural memory."""
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        worktree = get_git_worktree(cwd)
+        resolved_repo = repo or worktree["repo"]
+        if not resolved_repo:
+            console.print("[red]Could not determine repository.[/red]")
+            raise typer.Exit(1)
+            
+        repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", tuple(resolved_repo.split("/"))).fetchone()  # noqa: E501
+        if not repo_row:
+            console.print(f"Repository {resolved_repo} not found.")
+            raise typer.Exit(1)
+            
+        explanation = asyncio.run(architecture.explain_code(
+            connection, repo_row["id"], resolved_repo, file_path
+        ))
+        console.print(f"\n[bold cyan]Explanation for {file_path}[/bold cyan]")
+        console.print(explanation)
+    finally:
+        connection.close()
 
 @app.command("install-hooks")
 def install_hooks(

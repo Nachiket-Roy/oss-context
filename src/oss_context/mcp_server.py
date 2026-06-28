@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
+from oss_context import architecture
 from oss_context.code_index import (
     get_combined_file_context,
     get_impacted_files,
@@ -322,6 +323,38 @@ def create_mcp_server(settings: Settings) -> FastMCP:
             connection.close()
         return render_merge_readiness_markdown(payload)
 
+    @mcp.tool()
+    async def explain_implementation(repo: str, file_path: str) -> str:
+        """Explain why a file looks the way it does using architectural memory."""
+        connection = DatabaseManager(settings.db_path).initialize()
+        try:
+            repo_row = connection.execute(
+                "SELECT id FROM repos WHERE owner = ? AND name = ?",
+                tuple(RepoRef.from_slug(repo).slug.split("/"))
+            ).fetchone()
+            if not repo_row:
+                return f"Repo {repo} not found."
+            return await architecture.explain_code(connection, repo_row["id"], repo, file_path)
+        finally:
+            connection.close()
+
+    @mcp.tool()
+    async def get_design_summary(repo: str, target_type: str, target_id: int) -> str:
+        """Get the architectural design memory for a PR or issue."""
+        connection = DatabaseManager(settings.db_path).initialize()
+        try:
+            repo_row = connection.execute(
+                "SELECT id FROM repos WHERE owner = ? AND name = ?",
+                tuple(RepoRef.from_slug(repo).slug.split("/"))
+            ).fetchone()
+            if not repo_row:
+                return f"Repo {repo} not found."
+            memory = await architecture.generate_architectural_memory(connection, target_type, target_id, repo_row["id"])  # noqa: E501
+            import json
+            return json.dumps(memory, indent=2)
+        finally:
+            connection.close()
+
     @mcp.resource("pr://{owner}/{name}/{pr_number}/context")
     def pr_context_resource(owner: str, name: str, pr_number: int) -> str:
         """Read markdown PR context using a resource URI."""
@@ -331,6 +364,49 @@ def create_mcp_server(settings: Settings) -> FastMCP:
     def issue_context_resource(owner: str, name: str, issue_number: int) -> str:
         """Read markdown issue context using a resource URI."""
         return get_issue_context(f"{owner}/{name}", issue_number)
+
+    @mcp.resource("pr://{owner}/{name}/{pr_number}/design")
+    def pr_design(owner: str, name: str, pr_number: int) -> str:
+        """Fetch architectural design memory for a specific pull request."""
+        connection = DatabaseManager(settings.db_path).initialize()
+        try:
+            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()  # noqa: E501
+            if not repo_row:
+                return ""
+            import asyncio
+            memory = asyncio.run(architecture.generate_architectural_memory(connection, "pr", pr_number, repo_row["id"]))  # noqa: E501
+            import json
+            return json.dumps(memory, indent=2)
+        finally:
+            connection.close()
+
+    @mcp.resource("issue://{owner}/{name}/{issue_number}/design")
+    def issue_design(owner: str, name: str, issue_number: int) -> str:
+        """Fetch architectural design memory for a specific issue."""
+        connection = DatabaseManager(settings.db_path).initialize()
+        try:
+            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()  # noqa: E501
+            if not repo_row:
+                return ""
+            import asyncio
+            memory = asyncio.run(architecture.generate_architectural_memory(connection, "issue", issue_number, repo_row["id"]))  # noqa: E501
+            import json
+            return json.dumps(memory, indent=2)
+        finally:
+            connection.close()
+
+    @mcp.resource("code://{owner}/{name}/why/{path}")
+    def code_why_resource(owner: str, name: str, path: str) -> str:
+        """Explain why a file looks the way it does using architectural memory."""
+        connection = DatabaseManager(settings.db_path).initialize()
+        try:
+            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()  # noqa: E501
+            if not repo_row:
+                return ""
+            import asyncio
+            return asyncio.run(architecture.explain_code(connection, repo_row["id"], f"{owner}/{name}", path))  # noqa: E501
+        finally:
+            connection.close()
 
     @mcp.resource("pr://{owner}/{name}/unresolved")
     def unresolved_resource(owner: str, name: str) -> str:
