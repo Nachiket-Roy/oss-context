@@ -44,7 +44,7 @@ from oss_context.queries import (
 )
 from oss_context.review_assistant import get_merge_readiness_payload
 from oss_context.settings import Settings
-from oss_context.sync import sync_repository
+from oss_context.sync import ensure_issue_synced, ensure_pr_synced, sync_repository
 
 
 def create_mcp_server(settings: Settings) -> FastMCP:
@@ -87,9 +87,10 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         return report.model_dump(mode="json")
 
     @mcp.tool()
-    def get_pr_context(repo: str, pr_number: int) -> str:
+    async def get_pr_context(repo: str, pr_number: int, force_sync: bool = False) -> str:
         """Get markdown context for a PR, including health, decisions, threads, and links."""
         normalized_repo = RepoRef.from_slug(repo).slug
+        await ensure_pr_synced(normalized_repo, pr_number, settings, force_sync=force_sync)
         connection = _connect()
         try:
             payload = get_pr_context_payload(connection, repo=normalized_repo, pr_number=pr_number)
@@ -98,9 +99,10 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         return render_pr_context_markdown(payload)
 
     @mcp.tool()
-    def get_raw_pr_context(repo: str, pr_number: int) -> dict:
+    async def get_raw_pr_context(repo: str, pr_number: int, force_sync: bool = False) -> dict:
         """Get raw JSON review history for a PR, intended for IDE agents to synthesize summaries."""
         normalized_repo = RepoRef.from_slug(repo).slug
+        await ensure_pr_synced(normalized_repo, pr_number, settings, force_sync=force_sync)
         connection = _connect()
         try:
             return get_pr_context_payload(connection, repo=normalized_repo, pr_number=pr_number)
@@ -180,9 +182,10 @@ def create_mcp_server(settings: Settings) -> FastMCP:
             connection.close()
 
     @mcp.tool()
-    def get_issue_context(repo: str, issue_number: int) -> str:
+    async def get_issue_context(repo: str, issue_number: int, force_sync: bool = False) -> str:
         """Get markdown context for an issue, including references and backreferences."""
         normalized_repo = RepoRef.from_slug(repo).slug
+        await ensure_issue_synced(normalized_repo, issue_number, settings, force_sync=force_sync)
         connection = _connect()
         try:
             payload = get_issue_context_payload(
@@ -443,14 +446,14 @@ def create_mcp_server(settings: Settings) -> FastMCP:
             connection.close()
 
     @mcp.resource("pr://{owner}/{name}/{pr_number}/context")
-    def pr_context_resource(owner: str, name: str, pr_number: int) -> str:
+    async def pr_context_resource(owner: str, name: str, pr_number: int) -> str:
         """Read markdown PR context using a resource URI."""
-        return get_pr_context(f"{owner}/{name}", pr_number)
+        return await get_pr_context(f"{owner}/{name}", pr_number)
 
     @mcp.resource("issue://{owner}/{name}/{issue_number}/context")
-    def issue_context_resource(owner: str, name: str, issue_number: int) -> str:
+    async def issue_context_resource(owner: str, name: str, issue_number: int) -> str:
         """Read markdown issue context using a resource URI."""
-        return get_issue_context(f"{owner}/{name}", issue_number)
+        return await get_issue_context(f"{owner}/{name}", issue_number)
 
     @mcp.resource("pr://{owner}/{name}/{pr_number}/design")
     def pr_design(owner: str, name: str, pr_number: int) -> str:

@@ -558,3 +558,136 @@ async def sync_repository(
         return report
     finally:
         connection.close()
+
+
+async def sync_single_pr(repo_slug: str, pr_number: int, settings: Settings) -> None:
+    """Targeted JIT sync for a single PR, including its threads and comments."""
+    repo = RepoRef.from_slug(repo_slug)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        async with GitHubClient(settings) as client:
+            repo_data = await client.get_repo(repo)
+            repo_id, _ = _upsert_repo(
+                connection, repo, repo_data["id"], repo_data.get("default_branch")
+            )
+            pr = await client.fetch_single_pull_request(repo, pr_number)
+            pr_id = _upsert_pr(connection, repo_id, pr)
+            _replace_references(
+                connection,
+                repo_id=repo_id,
+                repo_slug=repo.slug,
+                source_kind="pr",
+                source_id=pr_id,
+                text=pr.body,
+            )
+            
+            threads = await client.fetch_review_threads(repo, pr_number)
+            for thread in threads:
+                thread_id = _upsert_thread(connection, pr_id, thread)
+                for comment in thread.comments:
+                    comment_id = _upsert_comment(connection, thread_id, comment)
+                    _replace_references(
+                        connection,
+                        repo_id=repo_id,
+                        repo_slug=repo.slug,
+                        source_kind="comment",
+                        source_id=comment_id,
+                        text=comment.body,
+                    )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+async def sync_single_issue(repo_slug: str, issue_number: int, settings: Settings) -> None:
+    """Targeted JIT sync for a single issue."""
+    repo = RepoRef.from_slug(repo_slug)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        async with GitHubClient(settings) as client:
+            repo_data = await client.get_repo(repo)
+            repo_id, _ = _upsert_repo(
+                connection, repo, repo_data["id"], repo_data.get("default_branch")
+            )
+            issue = await client.fetch_single_issue(repo, issue_number)
+            issue_id = _upsert_issue(connection, repo_id, issue)
+            _replace_references(
+                connection,
+                repo_id=repo_id,
+                repo_slug=repo.slug,
+                source_kind="issue",
+                source_id=issue_id,
+                text=issue.body,
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+async def ensure_pr_synced(
+    repo_slug: str, pr_number: int, settings: Settings, force_sync: bool = False
+) -> None:
+    repo = RepoRef.from_slug(repo_slug)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        row = connection.execute(
+            "SELECT p.updated_at FROM prs p JOIN repos r ON p.repo_id = r.id "
+            "WHERE r.owner = ? AND r.name = ? AND p.number = ?",
+            (repo.owner, repo.name, pr_number)
+        ).fetchone()
+        
+        needs_sync = False
+        if row is None or force_sync:
+            needs_sync = True
+        else:
+            async with GitHubClient(settings) as client:
+                remote_updated = await client.check_staleness(repo, "pr", pr_number)
+                if remote_updated:
+                    # SQLite stores ISO strings without timezone if inserted that way
+                    local_str = row["updated_at"]
+                    local_updated = datetime.fromisoformat(local_str.replace("Z", "+00:00"))
+                    if local_updated.tzinfo is None:
+                        local_updated = local_updated.replace(tzinfo=UTC)
+                    else:
+                        local_updated = local_updated.astimezone(UTC)
+                    if remote_updated > local_updated:
+                        needs_sync = True
+
+        if needs_sync:
+            await sync_single_pr(repo_slug, pr_number, settings)
+    finally:
+        connection.close()
+
+
+async def ensure_issue_synced(
+    repo_slug: str, issue_number: int, settings: Settings, force_sync: bool = False
+) -> None:
+    repo = RepoRef.from_slug(repo_slug)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        row = connection.execute(
+            "SELECT i.updated_at FROM issues i JOIN repos r ON i.repo_id = r.id "
+            "WHERE r.owner = ? AND r.name = ? AND i.number = ?",
+            (repo.owner, repo.name, issue_number)
+        ).fetchone()
+        
+        needs_sync = False
+        if row is None or force_sync:
+            needs_sync = True
+        else:
+            async with GitHubClient(settings) as client:
+                remote_updated = await client.check_staleness(repo, "issue", issue_number)
+                if remote_updated:
+                    local_str = row["updated_at"]
+                    local_updated = datetime.fromisoformat(local_str.replace("Z", "+00:00"))
+                    if local_updated.tzinfo is None:
+                        local_updated = local_updated.replace(tzinfo=UTC)
+                    else:
+                        local_updated = local_updated.astimezone(UTC)
+                    if remote_updated > local_updated:
+                        needs_sync = True
+
+        if needs_sync:
+            await sync_single_issue(repo_slug, issue_number, settings)
+    finally:
+        connection.close()
