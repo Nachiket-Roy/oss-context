@@ -645,11 +645,11 @@ async def ensure_pr_synced(
                 if remote_updated:
                     # SQLite stores ISO strings without timezone if inserted that way
                     local_str = row["updated_at"]
-                    if not local_str.endswith("Z") and "+" not in local_str:
-                        local_str += "+00:00"
-                    local_updated = datetime.fromisoformat(
-                        local_str.replace("Z", "+00:00")
-                    ).astimezone(UTC)
+                    local_updated = datetime.fromisoformat(local_str.replace("Z", "+00:00"))
+                    if local_updated.tzinfo is None:
+                        local_updated = local_updated.replace(tzinfo=UTC)
+                    else:
+                        local_updated = local_updated.astimezone(UTC)
                     if remote_updated > local_updated:
                         needs_sync = True
 
@@ -679,11 +679,11 @@ async def ensure_issue_synced(
                 remote_updated = await client.check_staleness(repo, "issue", issue_number)
                 if remote_updated:
                     local_str = row["updated_at"]
-                    if not local_str.endswith("Z") and "+" not in local_str:
-                        local_str += "+00:00"
-                    local_updated = datetime.fromisoformat(
-                        local_str.replace("Z", "+00:00")
-                    ).astimezone(UTC)
+                    local_updated = datetime.fromisoformat(local_str.replace("Z", "+00:00"))
+                    if local_updated.tzinfo is None:
+                        local_updated = local_updated.replace(tzinfo=UTC)
+                    else:
+                        local_updated = local_updated.astimezone(UTC)
                     if remote_updated > local_updated:
                         needs_sync = True
 

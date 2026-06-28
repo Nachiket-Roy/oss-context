@@ -134,7 +134,7 @@ def sync(
 ) -> None:
     """Sync a GitHub repository into the local database.
 
-    By default, requires explicit intent via --pr, --issue, --limit, or --all.
+    By default, requires explicit intent via --pr, --issue, --limit, --since, or --all.
     """
     settings = _load_cli_settings(db_path)
     normalized_repo = _normalize_repo(repo)
@@ -169,13 +169,17 @@ def sync(
     sync_limit = None if all_history else limit
 
     try:
-        if pr:
+        if pr is not None and issue is not None:
+            console.print("[red]Cannot specify both --pr and --issue.[/red]")
+            raise typer.Exit(code=1)
+
+        if pr is not None:
             console.print(f"Targeted sync of PR #{pr}...")
             asyncio.run(sync_single_pr(normalized_repo, pr, settings))
             console.print("Done.")
             return
 
-        if issue:
+        if issue is not None:
             console.print(f"Targeted sync of issue #{issue}...")
             asyncio.run(sync_single_issue(normalized_repo, issue, settings))
             console.print("Done.")
@@ -184,7 +188,7 @@ def sync(
         if sync_limit is None and not all_history and not since_override:
             console.print(
                 "[red]No sync target specified.[/red] "
-                "Use --pr <num>, --issue <num>, --limit <N>, or --all."
+                "Use --pr <num>, --issue <num>, --limit <N>, --since <duration>, or --all."
             )
             raise typer.Exit(code=1)
 

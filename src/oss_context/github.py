@@ -419,6 +419,14 @@ class GitHubClient:
             repo=repo.slug,
         )
         item = response.json()
+        if item.get("pull_request"):
+            raise GitHubApiError(
+                f"Requested issue #{issue_number} is a pull request.",
+                http_status=response.status_code,
+                response_text=response.text,
+                operation="fetch_single_issue",
+                repo=repo.slug,
+            )
         return IssueData(
             github_id=item["id"],
             number=item["number"],
