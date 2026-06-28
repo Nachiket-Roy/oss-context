@@ -207,3 +207,57 @@ def test_github_api_error_properties():
     assert exc.operation == "fetch_review_threads"
     assert exc.repo == "lima-vm/lima"
     assert str(exc) == "failed"
+
+
+def test_cli_sync_since_duration_parsing(tmp_path):
+    """Verify cli sync --since duration validation."""
+    from typer.testing import CliRunner
+
+    from oss_context.cli import app
+
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["sync", "lima-vm/lima", "--since", "invalid", "--db-path", str(tmp_path / "test.db")],
+    )
+    assert result.exit_code != 0
+    assert "Invalid since duration format" in result.output
+
+    result2 = runner.invoke(
+        app,
+        ["sync", "lima-vm/lima", "--since", "5m", "--db-path", str(tmp_path / "test.db")],
+    )
+    assert result2.exit_code != 0
+    assert "Invalid since duration format" in result2.output
+
+
+def test_cli_sync_since_success(tmp_path):
+    """Verify that a successful since option parses to a UTC datetime and invokes sync."""
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import patch
+
+    from typer.testing import CliRunner
+
+    from oss_context.cli import app
+
+    runner = CliRunner()
+
+    with patch("oss_context.cli.sync_repository") as mock_sync:
+        from oss_context.models import SyncReport
+        mock_sync.return_value = SyncReport(repo="lima-vm/lima", started_at=datetime.now(UTC))
+
+        result = runner.invoke(
+            app,
+            ["sync", "lima-vm/lima", "--since", "90d", "--db-path", str(tmp_path / "test.db")],
+        )
+        assert result.exit_code == 0
+        mock_sync.assert_called_once()
+        args, kwargs = mock_sync.call_args
+        since_val = kwargs.get("since_override")
+        assert since_val is not None
+        assert since_val.tzinfo == UTC
+        now = datetime.now(UTC)
+        expected_delta = timedelta(days=90)
+        delta = now - since_val
+        assert abs(delta.total_seconds() - expected_delta.total_seconds()) < 60
