@@ -139,6 +139,7 @@ def _get_manual_link(
                 "source": "manual_link",
                 "linked_at": row["linked_at"],
             }
+        return None
 
     rows = connection.execute(
         """

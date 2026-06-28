@@ -287,14 +287,21 @@ class LLMClassifier:
         by_comment = {comment.comment_id: comment for comment in comments}
         extracted: dict[int, DecisionExtraction] = {}
 
+        valid_statuses = {"OPEN", "RESOLVED", "ACCEPTED", "REJECTED", "SUPERSEDED"}
         for item in results:
             comment_id = int(item["comment_id"])
             if comment_id not in by_comment:
                 continue
+                
+            raw_status = item.get("status")
+            norm_status = raw_status.upper() if isinstance(raw_status, str) else None
+            if norm_status not in valid_statuses:
+                norm_status = None
+                
             extracted[comment_id] = DecisionExtraction(
                 decision_type=item["decision_type"],
                 summary=_clean_summary(item["summary"]),
-                status=item.get("status"),
+                status=norm_status,
                 reason=item.get("reason"),
                 confidence=float(item["confidence"]),
                 provider=provider,

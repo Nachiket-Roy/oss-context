@@ -64,7 +64,13 @@ async def analyze_pending_comments(
     pending: list[CommentForAnalysis] = []
     for row in rows:
         comment_hash = _body_hash(row["body"] or "")
-        if row["extracted_decision"] and row["input_hash"] == comment_hash:
+        # For backfills: even if the decision was already extracted and the hash matches,
+        # we may still need to backfill missing decision_status if the schema was just migrated.
+        # But to avoid re-running the LLM for every row, we check if decision_status is NULL in the log.
+        log_row = connection.execute("SELECT decision_status FROM decision_log WHERE comment_id = ? AND raw_text_hash = ?", (row["comment_id"], comment_hash)).fetchone()
+        needs_backfill = log_row and log_row["decision_status"] is None
+        
+        if row["extracted_decision"] and row["input_hash"] == comment_hash and not needs_backfill:
             continue
         pending.append(
             CommentForAnalysis(
@@ -136,9 +142,10 @@ async def analyze_pending_comments(
             )
 
             existing_log = connection.execute(
-                "SELECT 1 FROM decision_log WHERE comment_id = ? AND raw_text_hash = ?",
+                "SELECT id, decision_status, decision_reason FROM decision_log WHERE comment_id = ? AND raw_text_hash = ?",
                 (comment.comment_id, input_hash),
             ).fetchone()
+            
             if not existing_log:
                 connection.execute(
                     """
@@ -159,6 +166,17 @@ async def analyze_pending_comments(
                         decision.status,
                         decision.reason,
                     ),
+                )
+            elif existing_log["decision_status"] is None or existing_log["decision_reason"] is None:
+                # Backfill missing fields from existing analysis
+                connection.execute(
+                    """
+                    UPDATE decision_log 
+                    SET decision_status = COALESCE(decision_status, ?),
+                        decision_reason = COALESCE(decision_reason, ?)
+                    WHERE id = ?
+                    """,
+                    (decision.status, decision.reason, existing_log["id"])
                 )
             extracted_count += 1
 

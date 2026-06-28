@@ -93,10 +93,22 @@ async def generate_architectural_memory(
         # We assume if design_summaries exists, others exist. Return from DB.
         # But returning everything reconstructed might be tedious, so let's reconstruct it.
         design_summary = cached["summary"]
-        decisions = connection.execute(
-            f"SELECT summary, rationale, alternatives, outcome FROM architectural_decisions WHERE {target_type}_id = ?",  # noqa: E501
-            (target_id,)
-        ).fetchall()
+        
+        # We need the internal prs.id / issues.id, not the PR number
+        if target_type == "pr":
+            target_row = connection.execute("SELECT id FROM prs WHERE repo_id = ? AND number = ?", (repo_id, target_id)).fetchone()  # noqa: E501
+        else:
+            target_row = connection.execute("SELECT id FROM issues WHERE repo_id = ? AND number = ?", (repo_id, target_id)).fetchone()  # noqa: E501
+            
+        internal_id = target_row["id"] if target_row else None
+        
+        if internal_id:
+            decisions = connection.execute(
+                f"SELECT summary, rationale, alternatives, outcome FROM architectural_decisions WHERE {target_type}_id = ?",  # noqa: E501
+                (internal_id,)
+            ).fetchall()
+        else:
+            decisions = []
         impls = connection.execute(
             "SELECT file_path, summary FROM implementation_summaries WHERE target_type = ? AND target_id = ?",  # noqa: E501
             (target_type, target_id)
@@ -184,10 +196,18 @@ async def explain_code(connection: sqlite3.Connection, repo_id: int, repo_slug: 
         
         # Pull ADRs for that target
         if imp['target_type'] == 'pr':
-            adrs = connection.execute("SELECT summary, outcome, rationale FROM architectural_decisions WHERE pr_id = ?", (imp['target_id'],)).fetchall()  # noqa: E501
+            target_row = connection.execute("SELECT id FROM prs WHERE repo_id = ? AND number = ?", (repo_id, imp['target_id'])).fetchone()
+            if target_row:
+                adrs = connection.execute("SELECT summary, outcome, rationale FROM architectural_decisions WHERE pr_id = ?", (target_row['id'],)).fetchall()  # noqa: E501
+            else:
+                adrs = []
         else:
-            adrs = connection.execute("SELECT summary, outcome, rationale FROM architectural_decisions WHERE issue_id = ?", (imp['target_id'],)).fetchall()  # noqa: E501
-            
+            target_row = connection.execute("SELECT id FROM issues WHERE repo_id = ? AND number = ?", (repo_id, imp['target_id'])).fetchone()
+            if target_row:
+                adrs = connection.execute("SELECT summary, outcome, rationale FROM architectural_decisions WHERE issue_id = ?", (target_row['id'],)).fetchall()  # noqa: E501
+            else:
+                adrs = []
+                
         if adrs:
             context += "Decisions:\n"
             for adr in adrs:

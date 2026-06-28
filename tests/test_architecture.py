@@ -79,6 +79,12 @@ async def test_generate_architectural_memory_caches_result(mock_call_llm, db_con
     memory2 = await generate_architectural_memory(db_conn, "pr", 42, 1)
     assert mock_call_llm.call_count == 1  # No additional calls
     assert memory2["design_summary"] == "Test design summary"
+    assert len(memory2["decisions"]) == 2
+    # The first one is the seeded one: "Use OAuth2"
+    # The second is from mock: "Decide on X"
+    assert memory2["decisions"][1]["rationale"] == "Because Y"
+    assert len(memory2["rationale_links"]) == 1
+    assert memory2["rationale_links"][0]["relationship"] == "supports"
 
 
 @pytest.mark.asyncio
@@ -86,3 +92,4 @@ async def test_explain_code(db_conn):
     # explain_code falls back to returning the generated context when no API key is present
     explanation = await explain_code(db_conn, 1, "test/repo", "src/auth.py")
     assert "OAuth2" in explanation
+    assert "Because it is standard" in explanation
