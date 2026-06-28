@@ -316,7 +316,7 @@ async def sync_repository(
     *,
     extract_decisions: bool = True,
     batch_size: int = 10,
-    limit: int | None = 100,
+    limit: int | None = None,
     since_override: datetime | None = None,
 ) -> SyncReport:
     if batch_size <= 0:
@@ -335,28 +335,16 @@ async def sync_repository(
             repo_id_val = repo_payload["id"]
             default_branch_val = repo_payload.get("default_branch")
 
-            if since_override is not None:
-                last_synced_at = since_override
-            else:
-                # Resolve last_synced_at from DB
-                row = connection.execute(
-                    "SELECT last_synced_at FROM repos WHERE owner = ? AND name = ?",
-                    (repo.owner, repo.name),
-                ).fetchone()
-                last_synced_at = (
-                    datetime.fromisoformat(row["last_synced_at"]).astimezone(UTC)
-                    if row and row["last_synced_at"]
-                    else None
-                )
-
             # Register/upsert repository slug
-            repo_id, last_synced_at = _upsert_repo(
+            repo_id, db_last_synced_at = _upsert_repo(
                 connection,
                 repo,
                 github_id=repo_id_val,
                 default_branch=default_branch_val,
             )
             connection.commit()
+
+            last_synced_at = since_override if since_override is not None else db_last_synced_at
 
             print("Fetching PRs...", flush=True)
             prs_buffer = []

@@ -88,6 +88,7 @@ class GitHubClient:
                 if (
                     response.status_code == 403
                     and response.headers.get("x-ratelimit-remaining") == "0"
+                    and attempt < 2
                 ):
                     reset_at = response.headers.get("x-ratelimit-reset")
                     if reset_at:
