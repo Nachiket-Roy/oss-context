@@ -114,17 +114,17 @@ async def generate_architectural_memory(
     
     # Gather context
     if target_type == "pr":
-        row = connection.execute("SELECT * FROM prs WHERE id = ?", (target_id,)).fetchone()
+        row = connection.execute("SELECT * FROM prs WHERE repo_id = ? AND number = ?", (repo_id, target_id)).fetchone()
         if not row:
             return {}
         context = f"PR #{row['number']}: {row['title']}\n\n{row['body']}\n\n"
         decisions = connection.execute(
-            "SELECT * FROM decision_log WHERE pr_id = ?", (target_id,)
+            "SELECT * FROM decision_log WHERE pr_id = ?", (row["id"],)
         ).fetchall()
         for d in decisions:
             context += f"Comment: {d['raw_text']}\nDecision: {d['decision_status']} - {d['extracted_summary']}\nReason: {d['decision_reason']}\n\n"
     else:
-        row = connection.execute("SELECT * FROM issues WHERE id = ?", (target_id,)).fetchone()
+        row = connection.execute("SELECT * FROM issues WHERE repo_id = ? AND number = ?", (repo_id, target_id)).fetchone()
         if not row:
             return {}
         context = f"Issue #{row['number']}: {row['title']}\n\n{row['body']}\n\n"
@@ -141,8 +141,8 @@ async def generate_architectural_memory(
         (target_type, target_id, result.get("design_summary", ""), now)
     )
     
-    pr_id = target_id if target_type == "pr" else None
-    issue_id = target_id if target_type == "issue" else None
+    pr_id = row["id"] if target_type == "pr" else None
+    issue_id = row["id"] if target_type == "issue" else None
     
     for d in result.get("decisions", []):
         connection.execute(
