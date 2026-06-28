@@ -1,6 +1,3 @@
-<!-- Deferred roadmap notes for oss-context. -->
-# future_work.md
-
 ## Future Work
 
 These items are intentionally deferred. The current local-first workflows now cover synced PR and issue state, branch-aware context, lightweight code indexing, merge-readiness summaries, and a local HTML UI; the next set of improvements focuses on deepening repository intelligence, proactive assistance, richer editor integrations, and operational resilience.
