@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import subprocess
 from datetime import UTC, datetime
+
+from test_fixtures import run_isolated_git
 
 from oss_context.code_index import (
     get_combined_file_context,
@@ -23,19 +24,23 @@ def test_symbol_provenance_lineage(tmp_path):
     repo_root = tmp_path / "workspace"
     repo_root.mkdir()
 
-    # Initialize git repo to test git integration
-    subprocess.run(["git", "init", "-b", "main"], cwd=str(repo_root), check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo_root), check=True)
-    subprocess.run(["git", "config", "user.email", "t@ex.com"], cwd=str(repo_root), check=True)
+    # Initialize git repo to test git integration using isolated git runner
+    run_isolated_git(["git", "init", "-b", "main"], cwd=repo_root, check=True)
+    run_isolated_git(["git", "config", "user.name", "Test"], cwd=repo_root, check=True)
+    run_isolated_git(["git", "config", "user.email", "t@ex.com"], cwd=repo_root, check=True)
 
     # Create dummy python file
     (repo_root / "hello.py").write_text(SOURCE_CODE, encoding="utf-8")
-    subprocess.run(["git", "add", "hello.py"], cwd=str(repo_root), check=True)
-    subprocess.run(["git", "commit", "-m", "commit123"], cwd=str(repo_root), check=True)
+    run_isolated_git(["git", "add", "hello.py"], cwd=repo_root, check=True)
+    run_isolated_git(
+        ["git", "commit", "-m", "commit123", "--no-verify"],
+        cwd=repo_root,
+        check=True,
+    )
 
-    commit_sha = subprocess.run(
+    commit_sha = run_isolated_git(
         ["git", "rev-parse", "HEAD"],
-        cwd=str(repo_root),
+        cwd=repo_root,
         capture_output=True,
         text=True,
         check=True,

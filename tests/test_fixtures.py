@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,16 @@ from oss_context.branch_context import (
 )
 
 
+def run_isolated_git(args: list[str], cwd: Path | str, **kwargs) -> subprocess.CompletedProcess:
+    """Run a git command isolated from global/system config and hooks."""
+    env = os.environ.copy()
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    if args and args[0] == "git":
+        args = [args[0], "-c", "commit.gpgSign=false"] + args[1:]
+    return subprocess.run(args, cwd=str(cwd), env=env, **kwargs)
+
+
 @pytest.fixture
 def temp_git_repo(tmp_path: Path) -> Path:
     """Create a temporary git repository with a commit and remote configured."""
@@ -21,22 +32,26 @@ def temp_git_repo(tmp_path: Path) -> Path:
     repo_dir.mkdir()
 
     # Initialize a new git repository
-    subprocess.run(["git", "init", "-b", "main"], cwd=str(repo_dir), check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo_dir), check=True)
-    subprocess.run(["git", "config", "user.email", "t@ex.com"], cwd=str(repo_dir), check=True)
+    run_isolated_git(["git", "init", "-b", "main"], cwd=repo_dir, check=True)
+    run_isolated_git(["git", "config", "user.name", "Test"], cwd=repo_dir, check=True)
+    run_isolated_git(["git", "config", "user.email", "t@ex.com"], cwd=repo_dir, check=True)
 
     # Add origin remote
-    subprocess.run(
+    run_isolated_git(
         ["git", "remote", "add", "origin", "https://github.com/acme/widgets.git"],
-        cwd=str(repo_dir),
+        cwd=repo_dir,
         check=True,
     )
 
     # Commit dummy file to define the main branch
     dummy = repo_dir / "dummy.py"
     dummy.write_text("print('hello')", encoding="utf-8")
-    subprocess.run(["git", "add", "dummy.py"], cwd=str(repo_dir), check=True)
-    subprocess.run(["git", "commit", "-m", "first commit"], cwd=str(repo_dir), check=True)
+    run_isolated_git(["git", "add", "dummy.py"], cwd=repo_dir, check=True)
+    run_isolated_git(
+        ["git", "commit", "-m", "first commit", "--no-verify"],
+        cwd=repo_dir,
+        check=True,
+    )
 
     return repo_dir
 
