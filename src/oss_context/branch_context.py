@@ -327,7 +327,7 @@ def resolve_branch_pr(
                     break
         resolved_repo = detected_repo or worktree["repo"]
 
-    manual_link = _get_manual_link(connection, branch_name=resolved_branch, repo=resolved_repo)
+    manual_link = _get_manual_link(connection, branch_name=resolved_branch, repo=repo)
     if manual_link is not None:
         return {
             "repo_root": worktree["repo_root"],
