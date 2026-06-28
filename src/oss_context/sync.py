@@ -344,62 +344,74 @@ async def sync_repository(
                 else None
             )
 
-            print("Fetching PRs...", flush=True)
-            prs_list = []
-            async for pull_request in client.iter_pull_requests(repo, since=last_synced_at):
-                prs_list.append(pull_request)
-                if len(prs_list) % 100 == 0:
-                    if client.pr_total_estimate:
-                        print(
-                            f"Fetched {len(prs_list)}/{client.pr_total_estimate} PRs",
-                            flush=True,
-                        )
-                    else:
-                        print(f"Fetched {len(prs_list)} PRs", flush=True)
-
-            if not prs_list:
-                print("Fetched 0 PRs", flush=True)
-            elif len(prs_list) % 100 != 0:
-                if client.pr_total_estimate:
-                    print(
-                        f"Fetched {len(prs_list)}/{client.pr_total_estimate} PRs",
-                        flush=True,
-                    )
-                else:
-                    print(f"Fetched {len(prs_list)} PRs", flush=True)
-
-            print("Fetching review threads...", flush=True)
-            pr_threads_map = {}
-            for pr in prs_list:
-                threads = await client.fetch_review_threads(repo, pr.number)
-                pr_threads_map[pr.number] = threads
-
-            print("Fetching issues...", flush=True)
-            issues_list = []
-            async for issue in client.iter_issues(repo, since=last_synced_at):
-                issues_list.append(issue)
-
-            print("Writing to database...", flush=True)
+            # Register/upsert repository slug
             repo_id, last_synced_at = _upsert_repo(
                 connection,
                 repo,
                 github_id=repo_id_val,
                 default_branch=default_branch_val,
             )
+            connection.commit()
 
-            for pull_request in prs_list:
-                pr_id = _upsert_pr(connection, repo_id, pull_request)
-                report.prs_synced += 1
-                report.references_extracted += _replace_references(
-                    connection,
-                    repo_id=repo_id,
-                    repo_slug=repo.slug,
-                    source_kind="pr",
-                    source_id=pr_id,
-                    text=pull_request.body,
-                )
+            print("Fetching PRs...", flush=True)
+            prs_buffer = []
+            synced_prs_info = []
+            async for pull_request in client.iter_pull_requests(repo, since=last_synced_at):
+                prs_buffer.append(pull_request)
+                if len(prs_buffer) == 100:
+                    for pr in prs_buffer:
+                        pr_id = _upsert_pr(connection, repo_id, pr)
+                        synced_prs_info.append((pr_id, pr.number))
+                        report.prs_synced += 1
+                        report.references_extracted += _replace_references(
+                            connection,
+                            repo_id=repo_id,
+                            repo_slug=repo.slug,
+                            source_kind="pr",
+                            source_id=pr_id,
+                            text=pr.body,
+                        )
+                    connection.commit()
+                    prs_buffer.clear()
 
-                threads = pr_threads_map.get(pull_request.number) or []
+                    if client.pr_total_estimate:
+                        print(
+                            f"Fetched {report.prs_synced}/{client.pr_total_estimate} PRs",
+                            flush=True,
+                        )
+                    else:
+                        print(f"Fetched {report.prs_synced} PRs", flush=True)
+
+            if prs_buffer:
+                for pr in prs_buffer:
+                    pr_id = _upsert_pr(connection, repo_id, pr)
+                    synced_prs_info.append((pr_id, pr.number))
+                    report.prs_synced += 1
+                    report.references_extracted += _replace_references(
+                        connection,
+                        repo_id=repo_id,
+                        repo_slug=repo.slug,
+                        source_kind="pr",
+                        source_id=pr_id,
+                        text=pr.body,
+                    )
+                connection.commit()
+                prs_buffer.clear()
+
+            if report.prs_synced == 0:
+                print("Fetched 0 PRs", flush=True)
+            elif report.prs_synced % 100 != 0:
+                if client.pr_total_estimate:
+                    print(
+                        f"Fetched {report.prs_synced}/{client.pr_total_estimate} PRs",
+                        flush=True,
+                    )
+                else:
+                    print(f"Fetched {report.prs_synced} PRs", flush=True)
+
+            print("Fetching review threads...", flush=True)
+            for index, (pr_id, pr_number) in enumerate(synced_prs_info, start=1):
+                threads = await client.fetch_review_threads(repo, pr_number)
                 for thread in threads:
                     thread_id = _upsert_thread(connection, pr_id, thread)
                     report.threads_synced += 1
@@ -415,22 +427,71 @@ async def sync_repository(
                             text=comment.body,
                         )
 
-            connection.commit()
+                if index % 50 == 0:
+                    connection.commit()
 
-            for issue in issues_list:
-                issue_id = _upsert_issue(connection, repo_id, issue)
-                report.issues_synced += 1
-                report.references_extracted += _replace_references(
-                    connection,
-                    repo_id=repo_id,
-                    repo_slug=repo.slug,
-                    source_kind="issue",
-                    source_id=issue_id,
-                    text=issue.body,
-                )
+                if index % 100 == 0 or index == len(synced_prs_info):
+                    print(
+                        f"Fetched review threads for {index}/{len(synced_prs_info)} PRs",
+                        flush=True,
+                    )
 
             connection.commit()
 
+            print("Fetching issues...", flush=True)
+            issues_buffer = []
+            async for issue in client.iter_issues(repo, since=last_synced_at):
+                issues_buffer.append(issue)
+                if len(issues_buffer) == 100:
+                    for iss in issues_buffer:
+                        issue_id = _upsert_issue(connection, repo_id, iss)
+                        report.issues_synced += 1
+                        report.references_extracted += _replace_references(
+                            connection,
+                            repo_id=repo_id,
+                            repo_slug=repo.slug,
+                            source_kind="issue",
+                            source_id=issue_id,
+                            text=iss.body,
+                        )
+                    connection.commit()
+                    issues_buffer.clear()
+
+                    if client.issue_total_estimate:
+                        print(
+                            f"Fetched {report.issues_synced}/{client.issue_total_estimate} issues",
+                            flush=True,
+                        )
+                    else:
+                        print(f"Fetched {report.issues_synced} issues", flush=True)
+
+            if issues_buffer:
+                for iss in issues_buffer:
+                    issue_id = _upsert_issue(connection, repo_id, iss)
+                    report.issues_synced += 1
+                    report.references_extracted += _replace_references(
+                        connection,
+                        repo_id=repo_id,
+                        repo_slug=repo.slug,
+                        source_kind="issue",
+                        source_id=issue_id,
+                        text=iss.body,
+                    )
+                connection.commit()
+                issues_buffer.clear()
+
+            if report.issues_synced == 0:
+                print("Fetched 0 issues", flush=True)
+            elif report.issues_synced % 100 != 0:
+                if client.issue_total_estimate:
+                    print(
+                        f"Fetched {report.issues_synced}/{client.issue_total_estimate} issues",
+                        flush=True,
+                    )
+                else:
+                    print(f"Fetched {report.issues_synced} issues", flush=True)
+
+            print("Writing to database...", flush=True)
             connection.execute(
                 "UPDATE repos SET last_synced_at = ? WHERE id = ?",
                 (_iso(report.started_at), repo_id),

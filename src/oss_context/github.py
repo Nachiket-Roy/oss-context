@@ -245,7 +245,12 @@ class GitHubClient:
         return comments
 
     async def get_repo(self, repo: RepoRef) -> dict[str, Any]:
-        response = await self._request("GET", f"/repos/{repo.owner}/{repo.name}")
+        response = await self._request(
+            "GET",
+            f"/repos/{repo.owner}/{repo.name}",
+            operation="get_repo",
+            repo=repo.slug,
+        )
         return response.json()
 
     async def iter_pull_requests(
@@ -261,7 +266,12 @@ class GitHubClient:
         is_first = True
 
         while next_url:
-            response = await self._request("GET", next_url)
+            response = await self._request(
+                "GET",
+                next_url,
+                operation="iter_pull_requests",
+                repo=repo.slug,
+            )
             if is_first:
                 last_url = response.links.get("last", {}).get("url")
                 if last_url:
@@ -317,7 +327,12 @@ class GitHubClient:
         is_first = True
 
         while next_url:
-            response = await self._request("GET", next_url)
+            response = await self._request(
+                "GET",
+                next_url,
+                operation="iter_issues",
+                repo=repo.slug,
+            )
             if is_first:
                 last_url = response.links.get("last", {}).get("url")
                 if last_url:
