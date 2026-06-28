@@ -42,7 +42,7 @@ def test_merge_readiness_payload_summarizes_blockers_and_references(tmp_path):
                 thread_state, resolved_by, resolved_at, created_at, updated_at
             ) VALUES(1, 'thread-1', 1, 'service.py', 12, 'active', NULL, NULL, ?, ?)
             """,
-            ((now - timedelta(days=3)).isoformat(), now.isoformat()),
+            ((now - timedelta(days=3)).isoformat(), (now - timedelta(days=3)).isoformat()),
         )
         connection.execute(
             """

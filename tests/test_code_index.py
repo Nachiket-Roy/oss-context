@@ -166,6 +166,21 @@ def test_code_index_search_context_and_incremental_reuse(tmp_path):
         assert second_report["files_parsed"] == 2
         assert second_report["files_reused"] == 0
 
+        # Third run: nothing changes -> should reuse snapshot
+        third_report = index_codebase(connection, cwd=repo_root, repo="acme/widgets")
+        assert third_report["reused_snapshot"] is True
+        assert third_report["files_indexed"] == 2
+        assert third_report["files_parsed"] == 0
+        assert third_report["files_reused"] == 2
+
+        # Fourth run: only service.py changes -> should reuse handlers.py
+        (repo_root / "service.py").write_text(UPDATED_SERVICE_SOURCE + "\n# dummy change", encoding="utf-8")
+        fourth_report = index_codebase(connection, cwd=repo_root, repo="acme/widgets")
+        assert fourth_report["reused_snapshot"] is False
+        assert fourth_report["files_indexed"] == 2
+        assert fourth_report["files_parsed"] == 1
+        assert fourth_report["files_reused"] == 1
+
         renamed = search_symbols(connection, query="resolve_token", repo="acme/widgets")
         assert any(row["qualified_name"] == "resolve_token" for row in renamed)
         old = search_symbols(connection, query="check_token", repo="acme/widgets")

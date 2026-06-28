@@ -153,24 +153,28 @@ def run_retrieval_doctor(connection: sqlite3.Connection) -> dict[str, Any]:
         ORDER BY repo, p.number, t.id
         """
     ).fetchall()
+    files_cache = {}
     for row in thread_rows:
-        snapshot = latest_snapshots.get(str(row["repo"]))
+        repo = str(row["repo"])
+        snapshot = latest_snapshots.get(repo)
         if snapshot is None:
             continue
-        indexed_files = connection.execute(
-            """
-            SELECT f.file_path
-            FROM code_index_files f
-            JOIN code_index_snapshots s ON s.id = f.snapshot_id
-            WHERE s.repo_slug = ? AND s.id = (
-                SELECT MAX(id) FROM code_index_snapshots WHERE repo_slug = ?
-            )
-            """,
-            (row["repo"], row["repo"]),
-        ).fetchall()
+        if repo not in files_cache:
+            indexed_files = connection.execute(
+                """
+                SELECT f.file_path
+                FROM code_index_files f
+                JOIN code_index_snapshots s ON s.id = f.snapshot_id
+                WHERE s.repo_slug = ? AND s.id = (
+                    SELECT MAX(id) FROM code_index_snapshots WHERE repo_slug = ?
+                )
+                """,
+                (repo, repo),
+            ).fetchall()
+            files_cache[repo] = [str(file_row["file_path"]) for file_row in indexed_files]
         if not any(
-            _file_path_matches(str(file_row["file_path"]), str(row["file_path"]))
-            for file_row in indexed_files
+            _file_path_matches(repo_file, str(row["file_path"]))
+            for repo_file in files_cache[repo]
         ):
             orphaned_file_references.append(
                 {

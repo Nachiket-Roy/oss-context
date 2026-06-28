@@ -192,12 +192,17 @@ def _issue_link(repo: str, issue_number: int, label: str | None = None) -> str:
     return f'<a href="/issue/{quote(owner)}/{quote(name)}/{issue_number}">{escape(text)}</a>'
 
 
-def _code_file_link(repo: str, file_path: str, label: str | None = None) -> str:
+def _code_file_link(repo: str, file_path: str, label: str | None = None, branch: str | None = None) -> str:
     """Render an internal indexed file-context link."""
-    owner, name = repo.split("/", maxsplit=1)
     text = label or file_path
+    if "/" not in repo or repo.startswith("/") or repo.count("/") != 1:
+        return escape(text)
+    owner, name = repo.split("/", maxsplit=1)
+    href = f"/repo/{quote(owner)}/{quote(name)}/file?path={quote(file_path)}"
+    if branch:
+        href += f"&branch={quote(branch)}"
     return (
-        f'<a href="/repo/{quote(owner)}/{quote(name)}/file?path={quote(file_path)}">'
+        f'<a href="{href}">'
         f"{escape(text)}"
         "</a>"
     )
@@ -526,7 +531,7 @@ def _render_code_search_body(
             escape(row["branch"] or "—"),
             escape(row["kind"]),
             escape(row["qualified_name"]),
-            _code_file_link(row["repo"], row["file_path"]),
+            _code_file_link(row["repo"], row["file_path"], branch=row.get("branch")),
             escape(str(row["line_number"] or "—")),
         ]
         for row in rows
@@ -565,7 +570,7 @@ def _render_file_context_body(payload: dict[str, Any]) -> str:
     inbound_rows = [
         [
             escape(row["repo"]),
-            _code_file_link(row["repo"], row["file_path"]),
+            _code_file_link(row["repo"], row["file_path"], branch=row.get("branch")),
             escape(row["caller"]),
             escape(str(row["line_number"] or "—")),
         ]
@@ -715,6 +720,7 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                 if len(parts) == 4 and parts[0] == "repo" and parts[3] == "file":
                     repo = f"{parts[1]}/{parts[2]}"
                     file_path = query.get("path", [None])[0] or None
+                    branch = query.get("branch", [None])[0] or None
                     if not file_path:
                         raise ValueError("A file path is required via ?path=...")
                     title = f"File context · {repo}"
@@ -723,6 +729,7 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                             connection,
                             file_path=file_path,
                             repo=repo,
+                            branch=branch,
                         )
                     )
                     self._send_html(_page(title, body))

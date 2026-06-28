@@ -187,9 +187,12 @@ CREATE INDEX IF NOT EXISTS idx_branch_links_branch ON branch_links(branch_name);
 CREATE INDEX IF NOT EXISTS idx_code_snapshots_repo_branch ON code_index_snapshots(
     repo_slug, repo_root, git_branch, indexed_at
 );
+CREATE INDEX IF NOT EXISTS idx_code_snapshots_root_branch ON code_index_snapshots(repo_root, git_branch);
 CREATE INDEX IF NOT EXISTS idx_code_files_snapshot ON code_index_files(snapshot_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_code_symbols_name ON code_symbols(name, qualified_name, kind);
+CREATE INDEX IF NOT EXISTS idx_code_symbols_file ON code_symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_code_calls_callee ON code_calls(callee_name, caller_qualified_name);
+CREATE INDEX IF NOT EXISTS idx_code_calls_file ON code_calls(file_id);
 CREATE INDEX IF NOT EXISTS idx_refs_source ON extracted_references(source_kind, source_id);
 CREATE INDEX IF NOT EXISTS idx_refs_target ON extracted_references(
     target_repo, target_number, reference_kind

@@ -45,7 +45,7 @@ class _PythonIndexer(ast.NodeVisitor):
         self.symbols: list[dict[str, Any]] = []
         self.calls: list[dict[str, Any]] = []
         self._scope: list[str] = []
-        self._class_depth = 0
+        self._scope_kinds: list[str] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         qualified_name = ".".join([*self._scope, node.name])
@@ -61,16 +61,18 @@ class _PythonIndexer(ast.NodeVisitor):
             }
         )
         self._scope.append(node.name)
-        self._class_depth += 1
+        self._scope_kinds.append("class")
         self.generic_visit(node)
-        self._class_depth -= 1
+        self._scope_kinds.pop()
         self._scope.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._visit_function(node, kind="method" if self._class_depth else "function")
+        parent_kind = self._scope_kinds[-1] if self._scope_kinds else "global"
+        self._visit_function(node, kind="method" if parent_kind == "class" else "function")
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._visit_function(node, kind="method" if self._class_depth else "function")
+        parent_kind = self._scope_kinds[-1] if self._scope_kinds else "global"
+        self._visit_function(node, kind="method" if parent_kind == "class" else "function")
 
     def visit_Call(self, node: ast.Call) -> None:
         callee_name = _extract_callee_name(node.func)
@@ -98,7 +100,9 @@ class _PythonIndexer(ast.NodeVisitor):
             }
         )
         self._scope.append(node.name)
+        self._scope_kinds.append("function")
         self.generic_visit(node)
+        self._scope_kinds.pop()
         self._scope.pop()
 
 
@@ -153,7 +157,11 @@ def _detect_workspace(cwd: Path | None = None, *, repo: str | None = None) -> di
 def _iter_python_files(repo_root: Path) -> Iterable[Path]:
     """Yield Python source files under the workspace while skipping common cache dirs."""
     for path in repo_root.rglob("*.py"):
-        if any(part in EXCLUDED_DIRECTORIES for part in path.parts):
+        try:
+            relative_path = path.relative_to(repo_root)
+        except ValueError:
+            continue
+        if any(part in EXCLUDED_DIRECTORIES for part in relative_path.parts):
             continue
         if path.is_file():
             yield path
@@ -319,28 +327,44 @@ def index_codebase(
     git_commit = workspace["commit"]
     indexed_at = datetime.now(UTC).isoformat()
 
+    current_files = {}
+    skipped_files: list[str] = []
+    for path in sorted(_iter_python_files(repo_root)):
+        try:
+            relative_path = _normalize_repo_path(path, repo_root)
+            content_hash = _hash_file(path)
+            current_files[relative_path] = content_hash
+        except (OSError, ValueError) as exc:
+            LOGGER.warning("Skipping unreadable file during indexing: %s (%s)", path, exc)
+            skipped_files.append(path.as_posix())
+
     latest_snapshot = _latest_snapshot_row(
         connection,
         repo_root=str(repo_root),
         branch=branch_name,
     )
-    if latest_snapshot is not None and git_commit and latest_snapshot["git_commit"] == git_commit:
-        counts = _snapshot_counts(connection, int(latest_snapshot["id"]))
-        return {
-            "repo": repo_slug,
-            "repo_root": str(repo_root),
-            "branch": branch_name,
-            "commit": git_commit,
-            "snapshot_id": int(latest_snapshot["id"]),
-            "indexed_at": latest_snapshot["indexed_at"],
-            "files_indexed": counts["files"],
-            "files_parsed": 0,
-            "files_reused": counts["files"],
-            "symbols_indexed": counts["symbols"],
-            "calls_indexed": counts["calls"],
-            "skipped_files": [],
-            "reused_snapshot": True,
-        }
+
+    previous_files = {}
+    if latest_snapshot is not None:
+        previous_files = _previous_file_rows(connection, int(latest_snapshot["id"]))
+        previous_hashes = {k: v["content_hash"] for k, v in previous_files.items()}
+        if previous_hashes == current_files:
+            counts = _snapshot_counts(connection, int(latest_snapshot["id"]))
+            return {
+                "repo": repo_slug,
+                "repo_root": str(repo_root),
+                "branch": branch_name,
+                "commit": git_commit,
+                "snapshot_id": int(latest_snapshot["id"]),
+                "indexed_at": latest_snapshot["indexed_at"],
+                "files_indexed": counts["files"],
+                "files_parsed": 0,
+                "files_reused": counts["files"],
+                "symbols_indexed": counts["symbols"],
+                "calls_indexed": counts["calls"],
+                "skipped_files": skipped_files,
+                "reused_snapshot": True,
+            }
 
     cursor = connection.execute(
         """
@@ -352,27 +376,14 @@ def index_codebase(
     snapshot_id_raw = cursor.lastrowid
     assert snapshot_id_raw is not None
     snapshot_id = int(snapshot_id_raw)
-    previous_files = (
-        _previous_file_rows(connection, int(latest_snapshot["id"]))
-        if latest_snapshot is not None
-        else {}
-    )
 
     files_parsed = 0
     files_reused = 0
     symbols_indexed = 0
     calls_indexed = 0
-    skipped_files: list[str] = []
 
-    for path in sorted(_iter_python_files(repo_root)):
-        try:
-            relative_path = _normalize_repo_path(path, repo_root)
-            content_hash = _hash_file(path)
-        except (OSError, ValueError) as exc:
-            LOGGER.warning("Skipping unreadable file during indexing: %s (%s)", path, exc)
-            skipped_files.append(path.as_posix())
-            continue
-
+    for relative_path, content_hash in current_files.items():
+        path = repo_root / relative_path
         previous_file = previous_files.get(relative_path)
         if previous_file is not None and previous_file["content_hash"] == content_hash:
             _copy_prior_file(

@@ -367,7 +367,12 @@ def code_callees(
             branch=branch,
             limit=limit,
         )
-        console.print(render_symbol_search(rows, title=f"Symbol callees · {symbol}"))
+        mapped_rows = []
+        for r in rows:
+            mapped = dict(r)
+            mapped["qualified_name"] = r["callee"]
+            mapped_rows.append(mapped)
+        console.print(render_symbol_search(mapped_rows, title=f"Symbol callees · {symbol}"))
     finally:
         connection.close()
 
@@ -456,7 +461,7 @@ def review_ready(
     try:
         resolved_repo = normalized_repo
         resolved_pr = pr
-        if resolved_repo is None or resolved_pr is None:
+        if resolved_pr is None:
             resolved = resolve_branch_pr(
                 connection,
                 cwd=cwd,
@@ -465,6 +470,9 @@ def review_ready(
             )
             resolved_repo = resolved["repo"]
             resolved_pr = resolved["pr_number"]
+        elif resolved_repo is None:
+            worktree = get_git_worktree(cwd)
+            resolved_repo = worktree["repo"]
         assert resolved_repo is not None
         assert resolved_pr is not None
         payload = get_merge_readiness_payload(

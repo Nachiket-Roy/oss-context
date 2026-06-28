@@ -56,6 +56,12 @@ def get_merge_readiness_payload(
             f"{len(blocking_threads)} blocking review thread"
             f"{'s' if len(blocking_threads) != 1 else ''} still need to be addressed."
         )
+    elif waiting_on_author:
+        readiness_label = "needs author action"
+        summary = (
+            f"No blocking threads remain; {len(waiting_on_author)} non-blocking thread"
+            f"{'s' if len(waiting_on_author) != 1 else ''} still need author response or update."
+        )
     elif waiting_on_reviewer:
         readiness_label = "waiting on reviewer follow-up"
         summary = (
