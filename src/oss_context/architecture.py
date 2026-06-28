@@ -104,13 +104,13 @@ async def generate_architectural_memory(
             
         internal_id = target_row["id"] if target_row else None
         
-        if internal_id:
-            decisions = connection.execute(
-                f"SELECT summary, rationale, alternatives, outcome FROM architectural_decisions WHERE {target_type}_id = ?",  # noqa: E501
-                (internal_id,)
-            ).fetchall()
-        else:
-            decisions = []
+        if not internal_id:
+            return {}
+            
+        decisions = connection.execute(
+            f"SELECT summary, rationale, alternatives, outcome FROM architectural_decisions WHERE {target_type}_id = ?",  # noqa: E501
+            (internal_id,)
+        ).fetchall()
         impls = connection.execute(
             "SELECT file_path, summary FROM implementation_summaries WHERE repo_id = ? AND target_type = ? AND target_id = ?",  # noqa: E501
             (repo_id, target_type, target_id)

@@ -153,8 +153,6 @@ def _get_manual_link(
     if not rows:
         return None
     if len(rows) > 1:
-        if repo is not None:
-            return None
         raise BranchContextError(
             f"Branch {branch_name!r} is linked to multiple repos. Pass --repo to disambiguate."
         )

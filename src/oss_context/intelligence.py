@@ -66,9 +66,9 @@ async def analyze_pending_comments(
         comment_hash = _body_hash(row["body"] or "")
         # For backfills: even if the decision was already extracted and the hash matches,
         # we may still need to backfill missing decision_status if the schema was just migrated.
-        # But to avoid re-running the LLM for every row, we check if decision_status is NULL in the log.  # noqa: E501
-        log_row = connection.execute("SELECT decision_status FROM decision_log WHERE comment_id = ? AND raw_text_hash = ?", (row["comment_id"], comment_hash)).fetchone()  # noqa: E501
-        needs_backfill = log_row and log_row["decision_status"] is None
+        # But to avoid re-running the LLM for every row, we check if decision_status or decision_reason is NULL in the log.  # noqa: E501
+        log_row = connection.execute("SELECT decision_status, decision_reason FROM decision_log WHERE comment_id = ? AND raw_text_hash = ?", (row["comment_id"], comment_hash)).fetchone()  # noqa: E501
+        needs_backfill = log_row and (log_row["decision_status"] is None or log_row["decision_reason"] is None)  # noqa: E501
         
         if row["extracted_decision"] and row["input_hash"] == comment_hash and not needs_backfill:
             continue
