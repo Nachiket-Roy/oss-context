@@ -1056,7 +1056,7 @@ def list_resolved_pr_decisions(
     """List resolved architectural decisions made on a PR, across all files."""
     repo_ref = RepoRef.from_slug(repo)
     query = """
-    SELECT 
+    SELECT
         t.file_path,
         rc.author AS reviewer,
         rc.body AS raw_text,
@@ -1069,9 +1069,9 @@ def list_resolved_pr_decisions(
     JOIN review_threads t ON t.id = rc.thread_id
     JOIN prs p ON p.id = t.pr_id
     JOIN repos r ON r.id = p.repo_id
-    WHERE r.owner = ? AND r.name = ? 
-      AND p.number = ?
-      AND dl.decision_status IN ('RESOLVED', 'ACCEPTED', 'REJECTED', 'SUPERSEDED')
+    WHERE r.owner = ? AND r.name = ?
+    AND p.number = ?
+    AND t.thread_state = 'resolved'
     ORDER BY rc.created_at ASC
     """
     rows = connection.execute(
