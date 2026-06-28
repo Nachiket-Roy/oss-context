@@ -262,6 +262,8 @@ def query(
         raise typer.BadParameter("--author/--reviewer is required with --reviewer-status")
     if context and pr is None and issue is None:
         raise typer.BadParameter("--context requires --pr or --issue")
+    if (design or rationale) and pr is None and issue is None:
+        raise typer.BadParameter("--design and --rationale require --pr or --issue")
     if pr is not None and not (decisions or health or context or design or rationale):
         raise typer.BadParameter("--pr requires --decisions, --health, --context, --design, or --rationale")  # noqa: E501
     if issue is not None and not (context or design or rationale):

@@ -22,7 +22,7 @@ def db_conn(tmp_path):
     # Insert some architectural decisions
     conn.execute("INSERT INTO decision_log (id, comment_id, pr_id, decision_type, extracted_summary, extracted_at) VALUES (1, 1, 1, 'QUESTION', 'Ask about auth', '2020-01-01T00:00:00Z')")  # noqa: E501
     conn.execute("INSERT INTO architectural_decisions (id, repo_id, pr_id, summary, rationale, alternatives, outcome, created_at) VALUES (1, 1, 1, 'Use OAuth2', 'Because it is standard', 'JWT', 'ACCEPTED', '2020-01-01T00:00:00Z')")  # noqa: E501
-    conn.execute("INSERT INTO implementation_summaries (target_type, target_id, file_path, summary, generated_at) VALUES ('pr', 42, 'src/auth.py', 'Implements OAuth2', '2020-01-01T00:00:00Z')")  # noqa: E501
+    conn.execute("INSERT INTO implementation_summaries (repo_id, target_type, target_id, file_path, summary, generated_at) VALUES (1, 'pr', 42, 'src/auth.py', 'Implements OAuth2', '2020-01-01T00:00:00Z')")  # noqa: E501
     conn.commit()
     
     yield conn
@@ -67,11 +67,11 @@ async def test_generate_architectural_memory_caches_result(mock_call_llm, db_con
     assert memory["implementation"][0]["file_path"] == "src/main.py"
     
     # Verify DB insertion
-    row = db_conn.execute("SELECT summary FROM design_summaries WHERE target_type = 'pr' AND target_id = 42").fetchone()  # noqa: E501
+    row = db_conn.execute("SELECT summary FROM design_summaries WHERE repo_id = 1 AND target_type = 'pr' AND target_id = 42").fetchone()  # noqa: E501
     assert row is not None
     assert row["summary"] == "Test design summary"
     
-    imp_row = db_conn.execute("SELECT summary FROM implementation_summaries WHERE file_path = 'src/main.py'").fetchone()  # noqa: E501
+    imp_row = db_conn.execute("SELECT summary FROM implementation_summaries WHERE repo_id = 1 AND file_path = 'src/main.py'").fetchone()  # noqa: E501
     assert imp_row is not None
     assert imp_row["summary"] == "Added main logic"
     

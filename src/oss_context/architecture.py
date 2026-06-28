@@ -83,11 +83,13 @@ async def generate_architectural_memory(
     repo_id: int
 ) -> dict[str, Any]:
     """Lazily generate and cache architectural memory for a PR or Issue."""
+    if target_type not in ("pr", "issue"):
+        raise ValueError(f"Invalid target_type: {target_type}")
     
     # Check cache first
     cached = connection.execute(
-        "SELECT summary FROM design_summaries WHERE target_type = ? AND target_id = ?",
-        (target_type, target_id)
+        "SELECT summary FROM design_summaries WHERE repo_id = ? AND target_type = ? AND target_id = ?",  # noqa: E501
+        (repo_id, target_type, target_id)
     ).fetchone()
     if cached:
         # We assume if design_summaries exists, others exist. Return from DB.
@@ -110,12 +112,12 @@ async def generate_architectural_memory(
         else:
             decisions = []
         impls = connection.execute(
-            "SELECT file_path, summary FROM implementation_summaries WHERE target_type = ? AND target_id = ?",  # noqa: E501
-            (target_type, target_id)
+            "SELECT file_path, summary FROM implementation_summaries WHERE repo_id = ? AND target_type = ? AND target_id = ?",  # noqa: E501
+            (repo_id, target_type, target_id)
         ).fetchall()
         links = connection.execute(
-            "SELECT target_type, target_id, relationship FROM rationale_links WHERE source_type = 'design_summary' AND source_id = ?",  # noqa: E501
-            (target_id,)
+            "SELECT target_type, target_id, relationship FROM rationale_links WHERE repo_id = ? AND source_type = 'design_summary' AND source_id = ?",  # noqa: E501
+            (repo_id, target_id,)
         ).fetchall()
         return {
             "design_summary": design_summary,
@@ -149,8 +151,8 @@ async def generate_architectural_memory(
     now = datetime.now(UTC)
     
     connection.execute(
-        "INSERT INTO design_summaries (target_type, target_id, summary, generated_at) VALUES (?, ?, ?, ?)",  # noqa: E501
-        (target_type, target_id, result.get("design_summary", ""), now)
+        "INSERT INTO design_summaries (repo_id, target_type, target_id, summary, generated_at) VALUES (?, ?, ?, ?, ?)",  # noqa: E501
+        (repo_id, target_type, target_id, result.get("design_summary", ""), now)
     )
     
     pr_id = row["id"] if target_type == "pr" else None
@@ -164,14 +166,14 @@ async def generate_architectural_memory(
         
     for i in result.get("implementation", []):
         connection.execute(
-            "INSERT INTO implementation_summaries (target_type, target_id, file_path, summary, generated_at) VALUES (?, ?, ?, ?, ?)",  # noqa: E501
-            (target_type, target_id, i.get("file_path", ""), i.get("summary", ""), now)
+            "INSERT INTO implementation_summaries (repo_id, target_type, target_id, file_path, summary, generated_at) VALUES (?, ?, ?, ?, ?, ?)",  # noqa: E501
+            (repo_id, target_type, target_id, i.get("file_path", ""), i.get("summary", ""), now)
         )
         
     for link_obj in result.get("rationale_links", []):
         connection.execute(
-            "INSERT INTO rationale_links (source_type, source_id, target_type, target_id, relationship) VALUES (?, ?, ?, ?, ?)",  # noqa: E501
-            ("design_summary", target_id, link_obj.get("target_type", ""), link_obj.get("target_id", ""), link_obj.get("relationship", ""))  # noqa: E501
+            "INSERT INTO rationale_links (repo_id, source_type, source_id, target_type, target_id, relationship) VALUES (?, ?, ?, ?, ?, ?)",  # noqa: E501
+            (repo_id, "design_summary", target_id, link_obj.get("target_type", ""), link_obj.get("target_id", ""), link_obj.get("relationship", ""))  # noqa: E501
         )
         
     connection.commit()
@@ -182,8 +184,8 @@ async def explain_code(connection: sqlite3.Connection, repo_id: int, repo_slug: 
     
     # 1. Fetch all implementation summaries for this file
     impls = connection.execute(
-        "SELECT target_type, target_id, summary FROM implementation_summaries WHERE file_path = ?",
-        (file_path,)
+        "SELECT target_type, target_id, summary FROM implementation_summaries WHERE repo_id = ? AND file_path = ?",  # noqa: E501
+        (repo_id, file_path,)
     ).fetchall()
     
     if not impls:
@@ -196,13 +198,13 @@ async def explain_code(connection: sqlite3.Connection, repo_id: int, repo_slug: 
         
         # Pull ADRs for that target
         if imp['target_type'] == 'pr':
-            target_row = connection.execute("SELECT id FROM prs WHERE repo_id = ? AND number = ?", (repo_id, imp['target_id'])).fetchone()
+            target_row = connection.execute("SELECT id FROM prs WHERE repo_id = ? AND number = ?", (repo_id, imp['target_id'])).fetchone()  # noqa: E501
             if target_row:
                 adrs = connection.execute("SELECT summary, outcome, rationale FROM architectural_decisions WHERE pr_id = ?", (target_row['id'],)).fetchall()  # noqa: E501
             else:
                 adrs = []
         else:
-            target_row = connection.execute("SELECT id FROM issues WHERE repo_id = ? AND number = ?", (repo_id, imp['target_id'])).fetchone()
+            target_row = connection.execute("SELECT id FROM issues WHERE repo_id = ? AND number = ?", (repo_id, imp['target_id'])).fetchone()  # noqa: E501
             if target_row:
                 adrs = connection.execute("SELECT summary, outcome, rationale FROM architectural_decisions WHERE issue_id = ?", (target_row['id'],)).fetchall()  # noqa: E501
             else:

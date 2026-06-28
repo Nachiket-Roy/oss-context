@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS architectural_decisions (
 
 CREATE TABLE IF NOT EXISTS design_summaries (
     id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
     target_type TEXT NOT NULL,
     target_id INTEGER NOT NULL,
     summary TEXT NOT NULL,
@@ -141,6 +142,7 @@ CREATE TABLE IF NOT EXISTS design_summaries (
 
 CREATE TABLE IF NOT EXISTS implementation_summaries (
     id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
     target_type TEXT NOT NULL,
     target_id INTEGER NOT NULL,
     file_path TEXT NOT NULL,
@@ -150,6 +152,7 @@ CREATE TABLE IF NOT EXISTS implementation_summaries (
 
 CREATE TABLE IF NOT EXISTS rationale_links (
     id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
     source_type TEXT NOT NULL,
     source_id INTEGER NOT NULL,
     target_type TEXT NOT NULL,
@@ -263,12 +266,22 @@ class DatabaseManager:
         # Migrations
         try:
             connection.execute("ALTER TABLE decision_log ADD COLUMN decision_status TEXT")
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
         try:
             connection.execute("ALTER TABLE decision_log ADD COLUMN decision_reason TEXT")
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+                
+        # Phase 6 migrations for adding repo_id to caches
+        for table in ["design_summaries", "implementation_summaries", "rationale_links"]:
+            try:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN repo_id INTEGER")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
             
         connection.commit()
         return connection

@@ -326,7 +326,7 @@ def create_mcp_server(settings: Settings) -> FastMCP:
     @mcp.tool()
     async def explain_implementation(repo: str, file_path: str) -> str:
         """Explain why a file looks the way it does using architectural memory."""
-        connection = DatabaseManager(settings.db_path).connect()
+        connection = DatabaseManager(settings.db_path).initialize()
         try:
             repo_row = connection.execute(
                 "SELECT id FROM repos WHERE owner = ? AND name = ?",
@@ -341,7 +341,7 @@ def create_mcp_server(settings: Settings) -> FastMCP:
     @mcp.tool()
     async def get_design_summary(repo: str, target_type: str, target_id: int) -> str:
         """Get the architectural design memory for a PR or issue."""
-        connection = DatabaseManager(settings.db_path).connect()
+        connection = DatabaseManager(settings.db_path).initialize()
         try:
             repo_row = connection.execute(
                 "SELECT id FROM repos WHERE owner = ? AND name = ?",
@@ -368,7 +368,7 @@ def create_mcp_server(settings: Settings) -> FastMCP:
     @mcp.resource("pr://{owner}/{name}/{pr_number}/design")
     def pr_design(owner: str, name: str, pr_number: int) -> str:
         """Fetch architectural design memory for a specific pull request."""
-        connection = DatabaseManager(settings.db_path).connect()
+        connection = DatabaseManager(settings.db_path).initialize()
         try:
             repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()  # noqa: E501
             if not repo_row:
@@ -383,7 +383,7 @@ def create_mcp_server(settings: Settings) -> FastMCP:
     @mcp.resource("issue://{owner}/{name}/{issue_number}/design")
     def issue_design(owner: str, name: str, issue_number: int) -> str:
         """Fetch architectural design memory for a specific issue."""
-        connection = DatabaseManager(settings.db_path).connect()
+        connection = DatabaseManager(settings.db_path).initialize()
         try:
             repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()  # noqa: E501
             if not repo_row:
@@ -398,7 +398,7 @@ def create_mcp_server(settings: Settings) -> FastMCP:
     @mcp.resource("code://{owner}/{name}/why/{path}")
     def code_why_resource(owner: str, name: str, path: str) -> str:
         """Explain why a file looks the way it does using architectural memory."""
-        connection = DatabaseManager(settings.db_path).connect()
+        connection = DatabaseManager(settings.db_path).initialize()
         try:
             repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()  # noqa: E501
             if not repo_row:

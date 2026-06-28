@@ -297,11 +297,15 @@ class LLMClassifier:
             norm_status = raw_status.upper() if isinstance(raw_status, str) else None
             if norm_status not in valid_statuses:
                 norm_status = None
-                
+            
+            from typing import cast
+
+            from oss_context.models import DecisionStatus
+            
             extracted[comment_id] = DecisionExtraction(
                 decision_type=item["decision_type"],
                 summary=_clean_summary(item["summary"]),
-                status=norm_status,
+                status=cast(DecisionStatus | None, norm_status),
                 reason=item.get("reason"),
                 confidence=float(item["confidence"]),
                 provider=provider,
