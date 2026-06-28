@@ -322,6 +322,8 @@ def query(
             import json
             target_type = "pr" if pr is not None else "issue"
             target_id = pr if pr is not None else issue
+            assert normalized_repo is not None
+            assert target_id is not None
             # get repo_id
             repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", tuple(normalized_repo.split("/"))).fetchone()  # noqa: E501
             if not repo_row:
@@ -614,7 +616,7 @@ def branch_design(
     """Show architectural design memory for the current branch's PR."""
     import json
     settings = _load_cli_settings(db_path)
-    cwd = get_git_worktree()
+    cwd = Path.cwd()
     connection = DatabaseManager(settings.db_path).initialize()
     try:
         payload = resolve_branch_pr(connection, cwd=cwd)
