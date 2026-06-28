@@ -30,7 +30,8 @@ Interpretation rules:
 - QUESTION: asks for explanation or clarification
 - SUGGESTION: optional improvement or code suggestion, not clearly blocking
 - ACKNOWLEDGMENT: thanks, noted, resolved, done, informational follow-up
-- Status should reflect the lifecycle stage of a decision. e.g. REJECTED if an alternative was chosen.
+- Status should reflect the lifecycle stage of a decision. 
+  e.g. REJECTED if an alternative was chosen.
 """
 
 

@@ -46,7 +46,7 @@ async def _call_llm_for_architecture(context_text: str) -> dict[str, Any]:
     if not api_key:
         return {}
 
-    # Simplify by only using OpenAI structure for now (or Anthropic if configured, but let's assume OpenAI/generic JSON)
+    # Simplify by only using OpenAI structure for now (or Anthropic if configured, but let's assume OpenAI/generic JSON)  # noqa: E501
     payload = {
         "model": settings.llm_model,
         "response_format": {"type": "json_object"},
@@ -94,27 +94,27 @@ async def generate_architectural_memory(
         # But returning everything reconstructed might be tedious, so let's reconstruct it.
         design_summary = cached["summary"]
         decisions = connection.execute(
-            f"SELECT summary, rationale, alternatives, outcome FROM architectural_decisions WHERE {target_type}_id = ?",
+            f"SELECT summary, rationale, alternatives, outcome FROM architectural_decisions WHERE {target_type}_id = ?",  # noqa: E501
             (target_id,)
         ).fetchall()
         impls = connection.execute(
-            "SELECT file_path, summary FROM implementation_summaries WHERE target_type = ? AND target_id = ?",
+            "SELECT file_path, summary FROM implementation_summaries WHERE target_type = ? AND target_id = ?",  # noqa: E501
             (target_type, target_id)
         ).fetchall()
         links = connection.execute(
-            "SELECT target_type, target_id, relationship FROM rationale_links WHERE source_type = 'design_summary' AND source_id = ?",
+            "SELECT target_type, target_id, relationship FROM rationale_links WHERE source_type = 'design_summary' AND source_id = ?",  # noqa: E501
             (target_id,)
         ).fetchall()
         return {
             "design_summary": design_summary,
             "decisions": [dict(d) for d in decisions],
             "implementation": [dict(i) for i in impls],
-            "rationale_links": [dict(l) for l in links]
+            "rationale_links": [dict(link_row) for link_row in links]
         }
     
     # Gather context
     if target_type == "pr":
-        row = connection.execute("SELECT * FROM prs WHERE repo_id = ? AND number = ?", (repo_id, target_id)).fetchone()
+        row = connection.execute("SELECT * FROM prs WHERE repo_id = ? AND number = ?", (repo_id, target_id)).fetchone()  # noqa: E501
         if not row:
             return {}
         context = f"PR #{row['number']}: {row['title']}\n\n{row['body']}\n\n"
@@ -122,9 +122,9 @@ async def generate_architectural_memory(
             "SELECT * FROM decision_log WHERE pr_id = ?", (row["id"],)
         ).fetchall()
         for d in decisions:
-            context += f"Comment: {d['raw_text']}\nDecision: {d['decision_status']} - {d['extracted_summary']}\nReason: {d['decision_reason']}\n\n"
+            context += f"Comment: {d['raw_text']}\nDecision: {d['decision_status']} - {d['extracted_summary']}\nReason: {d['decision_reason']}\n\n"  # noqa: E501
     else:
-        row = connection.execute("SELECT * FROM issues WHERE repo_id = ? AND number = ?", (repo_id, target_id)).fetchone()
+        row = connection.execute("SELECT * FROM issues WHERE repo_id = ? AND number = ?", (repo_id, target_id)).fetchone()  # noqa: E501
         if not row:
             return {}
         context = f"Issue #{row['number']}: {row['title']}\n\n{row['body']}\n\n"
@@ -137,7 +137,7 @@ async def generate_architectural_memory(
     now = datetime.now(UTC)
     
     connection.execute(
-        "INSERT INTO design_summaries (target_type, target_id, summary, generated_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO design_summaries (target_type, target_id, summary, generated_at) VALUES (?, ?, ?, ?)",  # noqa: E501
         (target_type, target_id, result.get("design_summary", ""), now)
     )
     
@@ -146,26 +146,26 @@ async def generate_architectural_memory(
     
     for d in result.get("decisions", []):
         connection.execute(
-            "INSERT INTO architectural_decisions (repo_id, pr_id, issue_id, summary, rationale, alternatives, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (repo_id, pr_id, issue_id, d.get("summary", ""), d.get("rationale", ""), d.get("alternatives", ""), d.get("outcome", ""), now)
+            "INSERT INTO architectural_decisions (repo_id, pr_id, issue_id, summary, rationale, alternatives, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",  # noqa: E501
+            (repo_id, pr_id, issue_id, d.get("summary", ""), d.get("rationale", ""), d.get("alternatives", ""), d.get("outcome", ""), now)  # noqa: E501
         )
         
     for i in result.get("implementation", []):
         connection.execute(
-            "INSERT INTO implementation_summaries (target_type, target_id, file_path, summary, generated_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO implementation_summaries (target_type, target_id, file_path, summary, generated_at) VALUES (?, ?, ?, ?, ?)",  # noqa: E501
             (target_type, target_id, i.get("file_path", ""), i.get("summary", ""), now)
         )
         
     for link_obj in result.get("rationale_links", []):
         connection.execute(
-            "INSERT INTO rationale_links (source_type, source_id, target_type, target_id, relationship) VALUES (?, ?, ?, ?, ?)",
-            ("design_summary", target_id, link_obj.get("target_type", ""), link_obj.get("target_id", ""), link_obj.get("relationship", ""))
+            "INSERT INTO rationale_links (source_type, source_id, target_type, target_id, relationship) VALUES (?, ?, ?, ?, ?)",  # noqa: E501
+            ("design_summary", target_id, link_obj.get("target_type", ""), link_obj.get("target_id", ""), link_obj.get("relationship", ""))  # noqa: E501
         )
         
     connection.commit()
     return result
 
-async def explain_code(connection: sqlite3.Connection, repo_id: int, repo_slug: str, file_path: str) -> str:
+async def explain_code(connection: sqlite3.Connection, repo_id: int, repo_slug: str, file_path: str) -> str:  # noqa: E501
     """Synthesize a consolidated explanation for a file."""
     
     # 1. Fetch all implementation summaries for this file
@@ -184,9 +184,9 @@ async def explain_code(connection: sqlite3.Connection, repo_id: int, repo_slug: 
         
         # Pull ADRs for that target
         if imp['target_type'] == 'pr':
-            adrs = connection.execute("SELECT summary, outcome, rationale FROM architectural_decisions WHERE pr_id = ?", (imp['target_id'],)).fetchall()
+            adrs = connection.execute("SELECT summary, outcome, rationale FROM architectural_decisions WHERE pr_id = ?", (imp['target_id'],)).fetchall()  # noqa: E501
         else:
-            adrs = connection.execute("SELECT summary, outcome, rationale FROM architectural_decisions WHERE issue_id = ?", (imp['target_id'],)).fetchall()
+            adrs = connection.execute("SELECT summary, outcome, rationale FROM architectural_decisions WHERE issue_id = ?", (imp['target_id'],)).fetchall()  # noqa: E501
             
         if adrs:
             context += "Decisions:\n"
@@ -200,7 +200,7 @@ async def explain_code(connection: sqlite3.Connection, repo_id: int, repo_slug: 
     if not api_key:
         return context # Fallback
         
-    prompt = "Synthesize a consolidated explanation of why this file looks the way it does, combining implementation summaries, decisions, and rationale."
+    prompt = "Synthesize a consolidated explanation of why this file looks the way it does, combining implementation summaries, decisions, and rationale."  # noqa: E501
     payload = {
         "model": settings.llm_model,
         "messages": [

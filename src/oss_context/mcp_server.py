@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
+from oss_context import architecture
 from oss_context.code_index import (
     get_combined_file_context,
     get_impacted_files,
@@ -43,7 +44,6 @@ from oss_context.queries import (
 from oss_context.review_assistant import get_merge_readiness_payload
 from oss_context.settings import Settings
 from oss_context.sync import sync_repository
-from oss_context import architecture
 
 
 def create_mcp_server(settings: Settings) -> FastMCP:
@@ -349,7 +349,7 @@ def create_mcp_server(settings: Settings) -> FastMCP:
             ).fetchone()
             if not repo_row:
                 return f"Repo {repo} not found."
-            memory = await architecture.generate_architectural_memory(connection, target_type, target_id, repo_row["id"])
+            memory = await architecture.generate_architectural_memory(connection, target_type, target_id, repo_row["id"])  # noqa: E501
             import json
             return json.dumps(memory, indent=2)
         finally:
@@ -370,11 +370,11 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         """Fetch architectural design memory for a specific pull request."""
         connection = DatabaseManager(settings.db_path).connect()
         try:
-            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()
+            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()  # noqa: E501
             if not repo_row:
                 return ""
             import asyncio
-            memory = asyncio.run(architecture.generate_architectural_memory(connection, "pr", pr_number, repo_row["id"]))
+            memory = asyncio.run(architecture.generate_architectural_memory(connection, "pr", pr_number, repo_row["id"]))  # noqa: E501
             import json
             return json.dumps(memory, indent=2)
         finally:
@@ -385,11 +385,11 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         """Fetch architectural design memory for a specific issue."""
         connection = DatabaseManager(settings.db_path).connect()
         try:
-            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()
+            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()  # noqa: E501
             if not repo_row:
                 return ""
             import asyncio
-            memory = asyncio.run(architecture.generate_architectural_memory(connection, "issue", issue_number, repo_row["id"]))
+            memory = asyncio.run(architecture.generate_architectural_memory(connection, "issue", issue_number, repo_row["id"]))  # noqa: E501
             import json
             return json.dumps(memory, indent=2)
         finally:
@@ -400,11 +400,11 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         """Explain why a file looks the way it does using architectural memory."""
         connection = DatabaseManager(settings.db_path).connect()
         try:
-            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()
+            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", (owner, name)).fetchone()  # noqa: E501
             if not repo_row:
                 return ""
             import asyncio
-            return asyncio.run(architecture.explain_code(connection, repo_row["id"], f"{owner}/{name}", path))
+            return asyncio.run(architecture.explain_code(connection, repo_row["id"], f"{owner}/{name}", path))  # noqa: E501
         finally:
             connection.close()
 

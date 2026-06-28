@@ -263,7 +263,7 @@ def query(
     if context and pr is None and issue is None:
         raise typer.BadParameter("--context requires --pr or --issue")
     if pr is not None and not (decisions or health or context or design or rationale):
-        raise typer.BadParameter("--pr requires --decisions, --health, --context, --design, or --rationale")
+        raise typer.BadParameter("--pr requires --decisions, --health, --context, --design, or --rationale")  # noqa: E501
     if issue is not None and not (context or design or rationale):
         raise typer.BadParameter("--issue requires --context, --design, or --rationale")
 
@@ -323,7 +323,7 @@ def query(
             target_type = "pr" if pr is not None else "issue"
             target_id = pr if pr is not None else issue
             # get repo_id
-            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", tuple(normalized_repo.split("/"))).fetchone()
+            repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", tuple(normalized_repo.split("/"))).fetchone()  # noqa: E501
             if not repo_row:
                 console.print(f"Repository {normalized_repo} not found in database.")
                 raise typer.Exit(code=1)
@@ -333,7 +333,7 @@ def query(
             ))
             if design:
                 console.print("\n[bold cyan]Architectural Design Memory[/bold cyan]")
-                console.print(json.dumps({"design_summary": memory.get("design_summary"), "decisions": memory.get("decisions"), "implementation": memory.get("implementation")}, indent=2))
+                console.print(json.dumps({"design_summary": memory.get("design_summary"), "decisions": memory.get("decisions"), "implementation": memory.get("implementation")}, indent=2))  # noqa: E501
             if rationale:
                 console.print("\n[bold cyan]Rationale Graph Links[/bold cyan]")
                 console.print(json.dumps(memory.get("rationale_links", []), indent=2))
@@ -620,7 +620,7 @@ def branch_design(
         payload = resolve_branch_pr(connection, cwd=cwd)
         repo_slug = payload["repo"]
         pr_number = payload["pr_number"]
-        repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", tuple(repo_slug.split("/"))).fetchone()
+        repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", tuple(repo_slug.split("/"))).fetchone()  # noqa: E501
         if not repo_row:
             console.print(f"Repository {repo_slug} not found.")
             raise typer.Exit(code=1)
@@ -628,7 +628,7 @@ def branch_design(
         memory = asyncio.run(architecture.generate_architectural_memory(
             connection, "pr", pr_number, repo_row["id"]
         ))
-        console.print(f"\n[bold cyan]Architectural Design Memory for {repo_slug}#{pr_number}[/bold cyan]")
+        console.print(f"\n[bold cyan]Architectural Design Memory for {repo_slug}#{pr_number}[/bold cyan]")  # noqa: E501
         console.print(json.dumps(memory, indent=2))
     except BranchContextError as exc:
         _fail_branch_command(exc)
@@ -770,7 +770,7 @@ def code_why(
             console.print("[red]Could not determine repository.[/red]")
             raise typer.Exit(1)
             
-        repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", tuple(resolved_repo.split("/"))).fetchone()
+        repo_row = connection.execute("SELECT id FROM repos WHERE owner = ? AND name = ?", tuple(resolved_repo.split("/"))).fetchone()  # noqa: E501
         if not repo_row:
             console.print(f"Repository {resolved_repo} not found.")
             raise typer.Exit(1)
