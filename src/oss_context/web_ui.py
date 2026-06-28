@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
+from oss_context.code_index import get_combined_file_context, search_symbols
 from oss_context.db import DatabaseManager
 from oss_context.queries import (
     get_dashboard_summary,
@@ -20,6 +21,7 @@ from oss_context.queries import (
     list_repo_issues,
     list_unresolved_threads,
 )
+from oss_context.review_assistant import get_merge_readiness_payload
 from oss_context.settings import Settings
 
 CSS = """
@@ -132,7 +134,7 @@ button {
 def _page(title: str, body: str) -> str:
     """Wrap a page body in a consistent HTML shell."""
     nav = (
-        '<nav><a href="/">Dashboard</a> '
+        '<nav><a href="/">Dashboard</a> · <a href="/code/search">Code search</a> '
         '<span class="muted">· local-only UI backed by SQLite</span></nav>'
     )
     return (
@@ -188,6 +190,27 @@ def _issue_link(repo: str, issue_number: int, label: str | None = None) -> str:
     owner, name = repo.split("/", maxsplit=1)
     text = label or f"{repo}#{issue_number}"
     return f'<a href="/issue/{quote(owner)}/{quote(name)}/{issue_number}">{escape(text)}</a>'
+
+
+def _code_file_link(
+    repo: str,
+    file_path: str,
+    label: str | None = None,
+    branch: str | None = None,
+) -> str:
+    """Render an internal indexed file-context link."""
+    text = label or file_path
+    if "/" not in repo or repo.startswith("/") or repo.count("/") != 1:
+        return escape(text)
+    owner, name = repo.split("/", maxsplit=1)
+    href = f"/repo/{quote(owner)}/{quote(name)}/file?path={quote(file_path)}"
+    if branch:
+        href += f"&branch={quote(branch)}"
+    return (
+        f'<a href="{href}">'
+        f"{escape(text)}"
+        "</a>"
+    )
 
 
 def _safe_external_link(url: str) -> str | None:
@@ -397,7 +420,7 @@ def _render_pr_body(payload: dict[str, Any]) -> str:
     ]
     thread_rows = [
         [
-            f"<code>{escape(row['file_path'])}</code>",
+            _code_file_link(payload["repo"], row["file_path"], row["file_path"]),
             escape(row["reviewer"]),
             escape(row["decision_type"]),
             escape(row["waiting_on"]),
@@ -410,12 +433,13 @@ def _render_pr_body(payload: dict[str, Any]) -> str:
             escape(row["author"]),
             escape(row["decision_type"]),
             escape(f"{row['confidence']:.2f}"),
-            f"<code>{escape(row['file_path'])}</code>",
+            _code_file_link(payload["repo"], row["file_path"], row["file_path"]),
             escape(row["summary"]),
         ]
         for row in payload["decisions"]
     ]
     labels = ", ".join(payload["labels"]) if payload["labels"] else "—"
+    owner, name = payload["repo"].split("/", maxsplit=1)
 
     last_synced = escape(payload["repo_status"]["last_synced_at"] or "never")
     return "".join(
@@ -423,6 +447,10 @@ def _render_pr_body(payload: dict[str, Any]) -> str:
             f"<p><strong>Repo:</strong> {_repo_link(payload['repo'])}</p>",
             f"<p><strong>Labels:</strong> {escape(labels)}</p>",
             f"<p><strong>Last synced:</strong> {last_synced}</p>",
+            (
+                f"<p><a href='/pr/{quote(owner)}/{quote(name)}/"
+                f"{payload['pr_number']}/ready'>Open merge-readiness view</a></p>"
+            ),
             f'<div class="card-grid">{cards}</div>',
             "<section><h2>Linked references</h2>",
             _table(["Source", "Kind", "Target"], reference_rows),
@@ -478,6 +506,149 @@ def _render_issue_body(payload: dict[str, Any]) -> str:
     )
 
 
+def _render_code_search_body(
+    *,
+    connection,
+    query: str | None,
+    repo: str | None,
+    branch: str | None,
+) -> str:
+    """Render a code-search page backed by the local SQLite index."""
+    rows = (
+        search_symbols(connection, query=query, repo=repo, branch=branch, limit=100)
+        if query
+        else []
+    )
+    form = (
+        '<form class="filters" method="get">'
+        f"<label>Symbol<input name='q' value='{escape(query or '', quote=True)}' "
+        "placeholder='AuthService'></label>"
+        f"<label>Repo<input name='repo' value='{escape(repo or '', quote=True)}' "
+        "placeholder='owner/name'></label>"
+        f"<label>Branch<input name='branch' value='{escape(branch or '', quote=True)}' "
+        "placeholder='main'></label>"
+        "<button type='submit'>Search</button>"
+        "</form>"
+    )
+    result_rows = [
+        [
+            escape(row["repo"]),
+            escape(row["branch"] or "—"),
+            escape(row["kind"]),
+            escape(row["qualified_name"]),
+            _code_file_link(row["repo"], row["file_path"], branch=row.get("branch")),
+            escape(str(row["line_number"] or "—")),
+        ]
+        for row in rows
+        if "/" in row["repo"]
+    ]
+    empty = (
+        '<p class="muted">Enter a symbol name to search the local code index.</p>'
+        if not query
+        else ""
+    )
+    return "".join(
+        [
+            form,
+            empty,
+            "<section><h2>Results</h2>",
+            _table(["Repo", "Branch", "Kind", "Symbol", "File", "Line"], result_rows),
+            "</section>",
+        ]
+    )
+
+
+def _render_file_context_body(payload: dict[str, Any]) -> str:
+    """Render an indexed file-context page."""
+    symbol_rows = [
+        [escape(row["kind"]), escape(row["qualified_name"]), escape(str(row["line_number"] or "—"))]
+        for row in payload["symbols"]
+    ]
+    outbound_rows = [
+        [
+            escape(row["callee"]),
+            escape(str(row["call_count"])),
+            escape(str(row["first_line"] or "—")),
+        ]
+        for row in payload["outbound_calls"]
+    ]
+    inbound_rows = [
+        [
+            escape(row["repo"]),
+            _code_file_link(row["repo"], row["file_path"], branch=row.get("branch")),
+            escape(row["caller"]),
+            escape(str(row["line_number"] or "—")),
+        ]
+        for row in payload["inbound_calls"]
+        if "/" in row["repo"]
+    ]
+    history_rows = [
+        [
+            _pr_link(payload["repo"], row["pr_number"], f"#{row['pr_number']} {row['pr_title']}"),
+            escape(row["reviewer"]),
+            escape(row["decision_type"]),
+            escape(row["thread_state"]),
+            escape(row["summary"]),
+        ]
+        for row in payload["review_history"]
+        if payload["repo"]
+    ]
+    return "".join(
+        [
+            f"<p><strong>Repo:</strong> {escape(payload['repo'] or 'local workspace')}</p>",
+            f"<p><strong>File:</strong> <code>{escape(payload['file_path'])}</code></p>",
+            f"<p><strong>Branch:</strong> {escape(payload['branch'] or 'detached/unknown')}</p>",
+            f"<p><strong>Commit:</strong> {escape(payload['commit'] or 'unknown')}</p>",
+            f"<p><strong>Indexed at:</strong> {escape(payload['indexed_at'])}</p>",
+            "<section><h2>Defined symbols</h2>",
+            _table(["Kind", "Qualified name", "Line"], symbol_rows),
+            "</section>",
+            "<section><h2>Outgoing calls</h2>",
+            _table(["Callee", "Count", "First line"], outbound_rows),
+            "</section>",
+            "<section><h2>Inbound calls</h2>",
+            _table(["Repo", "File", "Caller", "Line"], inbound_rows),
+            "</section>",
+            "<section><h2>Review history</h2>",
+            _table(["PR", "Reviewer", "Decision", "State", "Summary"], history_rows),
+            "</section>",
+        ]
+    )
+
+
+def _render_merge_readiness_body(payload: dict[str, Any]) -> str:
+    """Render a PR merge-readiness page."""
+    cards = "".join(
+        [
+            _card("Health score", str(payload["health_score"])),
+            _card("Readiness score", str(payload["merge_readiness_score"])),
+            _card("Blocking threads", str(payload["blocking_threads"])),
+            _card("Waiting on reviewer", str(payload["waiting_on_reviewer_threads"])),
+        ]
+    )
+    actions = "".join(f"<li>{escape(item)}</li>" for item in payload["recommended_actions"])
+    references = "".join(f"<li>{escape(item)}</li>" for item in payload["linked_references"])
+    pr_label = f"#{payload['pr_number']} {payload['title']}"
+    return "".join(
+        [
+            f"<p><strong>Repo:</strong> {_repo_link(payload['repo'])}</p>",
+            (
+                f"<p><strong>PR:</strong> "
+                f"{_pr_link(payload['repo'], payload['pr_number'], pr_label)}</p>"
+            ),
+            f"<p><strong>Assessment:</strong> {escape(payload['readiness_label'])}</p>",
+            f"<p><strong>Summary:</strong> {escape(payload['summary'])}</p>",
+            f'<div class="card-grid">{cards}</div>',
+            "<section><h2>Recommended actions</h2><ul>",
+            actions or '<li class="muted">No immediate follow-up actions.</li>',
+            "</ul></section>",
+            "<section><h2>Linked references</h2><ul>",
+            references or '<li class="muted">No linked references.</li>',
+            "</ul></section>",
+        ]
+    )
+
+
 def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 8080) -> None:
     """Run the local HTML UI server."""
 
@@ -524,6 +695,20 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                     self._send_html(_page(title, body))
                     return
 
+                if len(parts) == 2 and parts[0] == "code" and parts[1] == "search":
+                    repo = query.get("repo", [None])[0] or None
+                    branch = query.get("branch", [None])[0] or None
+                    search_query = query.get("q", [None])[0] or None
+                    title = "Code search"
+                    body = _render_code_search_body(
+                        connection=connection,
+                        query=search_query,
+                        repo=repo,
+                        branch=branch,
+                    )
+                    self._send_html(_page(title, body))
+                    return
+
                 if len(parts) == 4 and parts[0] == "repo" and parts[3] == "issues":
                     repo = f"{parts[1]}/{parts[2]}"
                     state = query.get("state", [None])[0] or None
@@ -533,6 +718,24 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                         repo=repo,
                         state=state,
                         label=label,
+                    )
+                    self._send_html(_page(title, body))
+                    return
+
+                if len(parts) == 4 and parts[0] == "repo" and parts[3] == "file":
+                    repo = f"{parts[1]}/{parts[2]}"
+                    file_path = query.get("path", [None])[0] or None
+                    branch = query.get("branch", [None])[0] or None
+                    if not file_path:
+                        raise ValueError("A file path is required via ?path=...")
+                    title = f"File context · {repo}"
+                    body = _render_file_context_body(
+                        get_combined_file_context(
+                            connection,
+                            file_path=file_path,
+                            repo=repo,
+                            branch=branch,
+                        )
                     )
                     self._send_html(_page(title, body))
                     return
@@ -548,6 +751,19 @@ def serve_web_ui(settings: Settings, *, host: str = "127.0.0.1", port: int = 808
                         stale_days=stale_days,
                     )
                     self._send_html(_page(title, body))
+                    return
+
+                if len(parts) == 5 and parts[0] == "pr" and parts[4] == "ready":
+                    repo = f"{parts[1]}/{parts[2]}"
+                    pr_number = int(parts[3])
+                    payload = get_merge_readiness_payload(
+                        connection,
+                        repo=repo,
+                        pr_number=pr_number,
+                        stale_days=stale_days,
+                    )
+                    title = f"Merge readiness · PR #{pr_number} · {repo}"
+                    self._send_html(_page(title, _render_merge_readiness_body(payload)))
                     return
 
                 if len(parts) == 4 and parts[0] == "pr":

@@ -22,18 +22,32 @@ from oss_context.branch_context import (
     link_branch_to_pr,
     resolve_branch_pr,
 )
+from oss_context.code_index import (
+    get_combined_file_context,
+    get_impacted_files,
+    get_symbol_callees,
+    get_symbol_callers,
+    index_codebase,
+    search_symbols,
+)
 from oss_context.db import DatabaseManager
 from oss_context.formatting import (
     render_branch_context,
     render_branch_file_context,
     render_branch_resolution,
+    render_code_index_report,
     render_dashboard,
     render_decisions,
+    render_file_context_report,
     render_hook_installation,
+    render_impacted_files,
     render_issue_context,
+    render_merge_readiness,
     render_pr_context,
     render_pr_health,
+    render_retrieval_doctor,
     render_reviewer_status,
+    render_symbol_search,
     render_sync_report,
     render_tracked_repos,
     render_unresolved_threads,
@@ -51,13 +65,21 @@ from oss_context.queries import (
     list_tracked_repos,
     list_unresolved_threads,
 )
+from oss_context.retrieval import run_retrieval_doctor
+from oss_context.review_assistant import get_merge_readiness_payload
 from oss_context.settings import load_settings
 from oss_context.sync import sync_repository
 from oss_context.web_ui import serve_web_ui
 
 app = typer.Typer(help="Track GitHub PR and issue context in a local SQLite knowledge graph.")
 branch_app = typer.Typer(help="Resolve the current git branch to pull-request context.")
+code_app = typer.Typer(help="Index local code and query symbol-aware repository intelligence.")
+review_app = typer.Typer(help="Summarize merge-readiness and follow-up review actions.")
+doctor_app = typer.Typer(help="Inspect retrieval quality and local data-health issues.")
 app.add_typer(branch_app, name="branch")
+app.add_typer(code_app, name="code")
+app.add_typer(review_app, name="review")
+app.add_typer(doctor_app, name="doctor")
 console = Console()
 
 
@@ -262,6 +284,210 @@ def query(
         connection.close()
 
 
+@code_app.command("index")
+def code_index_command(
+    cwd: Path | None = typer.Option(None, help="Workspace root to index."),
+    repo: str | None = typer.Option(None, help="Override the detected GitHub repo slug."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Index Python files from the local workspace into SQLite."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        report = index_codebase(connection, cwd=cwd, repo=normalized_repo)
+        console.print(render_code_index_report(report))
+    finally:
+        connection.close()
+
+
+@code_app.command("search")
+def code_search(
+    query: str = typer.Argument(..., help="Symbol name or qualified-name fragment to search for."),
+    repo: str | None = typer.Option(None, help="Filter by repository in owner/name form."),
+    branch: str | None = typer.Option(None, help="Filter by indexed git branch name."),
+    limit: int = typer.Option(25, min=1, help="Maximum number of results to return."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Search indexed symbols from the latest snapshot scope."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        rows = search_symbols(
+            connection, query=query, repo=normalized_repo, branch=branch, limit=limit
+        )
+        console.print(render_symbol_search(rows, title=f"Symbol search · {query}"))
+    finally:
+        connection.close()
+
+
+@code_app.command("callers")
+def code_callers(
+    symbol: str = typer.Argument(..., help="Qualified or unqualified symbol name."),
+    repo: str | None = typer.Option(None, help="Filter by repository in owner/name form."),
+    branch: str | None = typer.Option(None, help="Filter by indexed git branch name."),
+    limit: int = typer.Option(100, min=1, help="Maximum number of results to return."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Show indexed callers for a symbol."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        rows = get_symbol_callers(
+            connection,
+            symbol=symbol,
+            repo=normalized_repo,
+            branch=branch,
+            limit=limit,
+        )
+        console.print(render_symbol_search(rows, title=f"Symbol callers · {symbol}"))
+    finally:
+        connection.close()
+
+
+@code_app.command("callees")
+def code_callees(
+    symbol: str = typer.Argument(..., help="Qualified or unqualified symbol name."),
+    repo: str | None = typer.Option(None, help="Filter by repository in owner/name form."),
+    branch: str | None = typer.Option(None, help="Filter by indexed git branch name."),
+    limit: int = typer.Option(100, min=1, help="Maximum number of results to return."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Show indexed outgoing calls made by a symbol."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        rows = get_symbol_callees(
+            connection,
+            symbol=symbol,
+            repo=normalized_repo,
+            branch=branch,
+            limit=limit,
+        )
+        mapped_rows = []
+        for r in rows:
+            mapped = dict(r)
+            mapped["qualified_name"] = r["callee"]
+            mapped_rows.append(mapped)
+        console.print(render_symbol_search(mapped_rows, title=f"Symbol callees · {symbol}"))
+    finally:
+        connection.close()
+
+
+@code_app.command("impacted")
+def code_impacted(
+    symbol: str = typer.Argument(..., help="Qualified or unqualified symbol name."),
+    repo: str | None = typer.Option(None, help="Filter by repository in owner/name form."),
+    branch: str | None = typer.Option(None, help="Filter by indexed git branch name."),
+    limit: int = typer.Option(50, min=1, help="Maximum number of files to return."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Show files impacted by a symbol definition and its direct callers."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        rows = get_impacted_files(
+            connection,
+            symbol=symbol,
+            repo=normalized_repo,
+            branch=branch,
+            limit=limit,
+        )
+        console.print(render_impacted_files(rows, symbol=symbol))
+    finally:
+        connection.close()
+
+
+@code_app.command("context")
+def code_context(
+    file_path: str = typer.Argument(..., help="Repo-relative or absolute file path to inspect."),
+    repo: str | None = typer.Option(None, help="Filter by repository in owner/name form."),
+    branch: str | None = typer.Option(None, help="Filter by indexed git branch name."),
+    explain: bool = typer.Option(False, help="Show retrieval reasons and confidence levels."),
+    cwd: Path | None = typer.Option(None, help="Workspace root for path normalization."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Show combined code and review context for a file."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        payload = get_combined_file_context(
+            connection,
+            file_path=file_path,
+            repo=normalized_repo,
+            branch=branch,
+            cwd=cwd,
+            explain=explain,
+        )
+        console.print(render_file_context_report(payload))
+    finally:
+        connection.close()
+
+
+@doctor_app.command("retrieval")
+def doctor_retrieval(
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Inspect retrieval-quality issues such as stale links and orphaned file references."""
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        console.print(render_retrieval_doctor(run_retrieval_doctor(connection)))
+    finally:
+        connection.close()
+
+
+@review_app.command("ready")
+def review_ready(
+    repo: str | None = typer.Option(None, help="Repository in owner/name form."),
+    pr: int | None = typer.Option(None, help="Pull request number."),
+    cwd: Path | None = typer.Option(None, help="Git working tree to inspect for branch defaults."),
+    no_gh_fallback: bool = typer.Option(
+        False,
+        help="Skip GitHub CLI fallback when resolving the current branch PR.",
+    ),
+    stale_days: int = typer.Option(3, min=0, help="Staleness threshold for follow-up suggestions."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Summarize what remains before a PR is likely ready to merge."""
+    normalized_repo = _normalize_repo(repo)
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        resolved_repo = normalized_repo
+        resolved_pr = pr
+        if resolved_pr is None:
+            resolved = resolve_branch_pr(
+                connection,
+                cwd=cwd,
+                repo=normalized_repo,
+                allow_gh_fallback=not no_gh_fallback,
+            )
+            resolved_repo = resolved["repo"]
+            resolved_pr = resolved["pr_number"]
+        elif resolved_repo is None:
+            worktree = get_git_worktree(cwd)
+            resolved_repo = worktree["repo"]
+        assert resolved_repo is not None
+        assert resolved_pr is not None
+        payload = get_merge_readiness_payload(
+            connection,
+            repo=resolved_repo,
+            pr_number=resolved_pr,
+            stale_days=stale_days,
+        )
+        console.print(render_merge_readiness(payload))
+    except BranchContextError as exc:
+        _fail_branch_command(exc)
+    finally:
+        connection.close()
+
+
 @branch_app.command("current-pr")
 def branch_current_pr(
     repo: str | None = typer.Option(None, help="Override the detected GitHub repo."),
@@ -291,6 +517,7 @@ def context(
         False,
         help="Skip GitHub CLI fallback and resolve only from local metadata and synced state.",
     ),
+    explain: bool = typer.Option(False, help="Show retrieval reasons and confidence levels."),
     fail_on_blocking: bool = typer.Option(
         False,
         help="Exit with code 10 when the resolved PR still has blocking threads.",
@@ -309,6 +536,7 @@ def context(
             repo=normalized_repo,
             branch_name=branch,
             allow_gh_fallback=not no_gh_fallback,
+            explain=explain,
         )
         if not quiet:
             console.print(render_branch_context(payload))
@@ -331,6 +559,7 @@ def branch_file_context(
         False,
         help="Skip GitHub CLI fallback and resolve only from local metadata and synced state.",
     ),
+    explain: bool = typer.Option(False, help="Show retrieval reasons and confidence levels."),
     db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
 ) -> None:
     """Show unresolved review context for a file on the current branch PR."""
@@ -345,6 +574,7 @@ def branch_file_context(
             repo=normalized_repo,
             branch_name=branch,
             allow_gh_fallback=not no_gh_fallback,
+            explain=explain,
         )
         console.print(render_branch_file_context(payload))
     except (BranchContextError, ValueError) as exc:

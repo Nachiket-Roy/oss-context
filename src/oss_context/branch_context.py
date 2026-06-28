@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from oss_context.models import RepoRef
 from oss_context.queries import get_pr_context_payload, list_unresolved_threads
+from oss_context.retrieval import build_provenance, summarize_provenance
 
 CommandRunner = Callable[[list[str], Path | None, bool], str | None]
 COMMAND_TIMEOUT_SECONDS = 5.0
@@ -400,6 +401,7 @@ def get_branch_context_payload(
     branch_name: str | None = None,
     allow_gh_fallback: bool = True,
     runner: CommandRunner = _run_command,
+    explain: bool = False,
 ) -> dict[str, Any]:
     """Assemble branch-aware PR context for the current worktree."""
     resolved = resolve_branch_pr(
@@ -415,6 +417,18 @@ def get_branch_context_payload(
         repo=resolved["repo"],
         pr_number=resolved["pr_number"],
     )
+    resolution_reason = {
+        "manual_link": "Manual branch-to-PR link matched the current branch.",
+        "synced_branch": "Exact branch name matched a synced PR head branch.",
+        "gh_cli": "GitHub CLI returned the PR for the current branch.",
+    }.get(resolved["source"], "Resolved from branch-aware PR context.")
+    branch_provenance = build_provenance(
+        source_type="branch_pr_resolution",
+        source_id=f"{resolved['repo']}:{resolved['branch']}:{resolved['pr_number']}",
+        confidence="HIGH",
+        retrieval_reason="exact_branch_mapping",
+        reason_detail=resolution_reason,
+    )
     return {
         "repo": resolved["repo"],
         "pr_number": resolved["pr_number"],
@@ -422,6 +436,9 @@ def get_branch_context_payload(
         "repo_root": str(resolved["repo_root"]),
         "resolution_source": resolved["source"],
         "pr_context": pr_context,
+        "explain": explain,
+        "provenance": branch_provenance,
+        "retrieval_explanations": summarize_provenance([{"provenance": branch_provenance}]),
     }
 
 
@@ -434,6 +451,7 @@ def get_branch_file_context(
     branch_name: str | None = None,
     allow_gh_fallback: bool = True,
     runner: CommandRunner = _run_command,
+    explain: bool = False,
 ) -> dict[str, Any]:
     """Assemble file-scoped unresolved review context for the current branch PR."""
     branch_context = get_branch_context_payload(
@@ -443,6 +461,7 @@ def get_branch_file_context(
         branch_name=branch_name,
         allow_gh_fallback=allow_gh_fallback,
         runner=runner,
+        explain=explain,
     )
     relative_path = _normalize_file_for_repo(file_path, Path(branch_context["repo_root"]))
     all_threads = [
@@ -451,9 +470,39 @@ def get_branch_file_context(
         if row["pr_number"] == branch_context["pr_number"]
     ]
     matching_threads = [
-        row
+        {
+            **row,
+            "provenance": build_provenance(
+                source_type="review_thread",
+                source_id=str(row["thread_id"]),
+                confidence="HIGH",
+                retrieval_reason="exact_file_match",
+                reason_detail=f"Active review thread matches {row['file_path']}",
+            ),
+        }
         for row in all_threads
         if row["file_path"] not in {None, "—"} and _file_matches(row["file_path"], relative_path)
+    ]
+    references = [
+        {
+            **reference,
+            "provenance": build_provenance(
+                source_type=(
+                    "pr_reference" if reference["source_kind"] == "pr" else "review_reference"
+                ),
+                source_id=str(reference["raw_text"]),
+                confidence="HIGH",
+                retrieval_reason="explicit_issue_reference",
+                reason_detail="Explicit reference found in the current PR context.",
+            ),
+        }
+        for reference in branch_context["pr_context"]["references"]
+        if reference.get("target_number") is not None or reference.get("url")
+    ]
+    provenance_items = [
+        {"provenance": branch_context["provenance"]},
+        *matching_threads,
+        *references,
     ]
     return {
         "repo": branch_context["repo"],
@@ -463,4 +512,9 @@ def get_branch_file_context(
         "resolution_source": branch_context["resolution_source"],
         "file_path": relative_path,
         "threads": matching_threads,
+        "references": references,
+        "explain": explain,
+        "provenance": branch_context["provenance"],
+        "retrieval_explanations": summarize_provenance(provenance_items),
+        "excluded": ["Semantic retrieval is not enabled; only deterministic context was returned."],
     }

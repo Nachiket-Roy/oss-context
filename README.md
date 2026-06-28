@@ -2,6 +2,8 @@
 
 `oss-context` tracks pull request review decisions and reviewer state across GitHub PRs using a local SQLite knowledge graph.
 
+The retrieval path is intentionally deterministic first: branch-to-PR mapping, exact file matches, explicit GitHub references, and indexed symbol relationships are preferred ahead of any looser heuristics.
+
 ## Installation
 
 Requires Python 3.12 or newer.
@@ -86,8 +88,29 @@ oss-context branch current-pr
 # Show branch-aware PR context for the current worktree
 oss-context branch context
 
+# Explain why branch/file context was returned and the confidence level
+oss-context branch file-context src/auth.py --explain
+
 # Show file-level unresolved review context for the current branch PR
 oss-context branch file-context src/auth.py
+
+# Index local Python code for symbol-aware retrieval
+oss-context code index
+
+# Search symbols and inspect file-level code + review context
+oss-context code search check_token
+oss-context code context src/auth.py --explain
+
+# Show direct callers/callees and impacted files for a symbol
+oss-context code callers check_token
+oss-context code callees check_token
+oss-context code impacted check_token
+
+# Summarize what remains before the current branch PR is ready to merge
+oss-context review ready
+
+# Run retrieval-quality diagnostics for links, indexes, and file references
+oss-context doctor retrieval
 
 # Manually pin the current branch to a synced PR
 oss-context branch link --repo owner/repo --pr 42
@@ -119,9 +142,12 @@ uv run oss-context ui --host 127.0.0.1 --port 8080
 Useful UI routes:
 
 - `/` — dashboard
+- `/code/search` — symbol search over the local code index
 - `/repo/{owner}/{name}` — repo overview
 - `/repo/{owner}/{name}/issues` — repo issue list
+- `/repo/{owner}/{name}/file?path=src/auth.py` — indexed file context
 - `/pr/{owner}/{name}/{number}` — PR detail
+- `/pr/{owner}/{name}/{number}/ready` — merge-readiness view
 - `/issue/{owner}/{name}/{number}` — issue detail
 
 Exposed MCP tools include:
@@ -133,6 +159,13 @@ Exposed MCP tools include:
 - `get_reviewer_state`
 - `get_dashboard`
 - `search_work`
+- `index_code`
+- `search_code`
+- `get_symbol_callers_tool`
+- `get_symbol_callees_tool`
+- `get_impacted_files_tool`
+- `get_file_context`
+- `get_merge_readiness`
 
 Exposed MCP resources include:
 
@@ -141,6 +174,7 @@ Exposed MCP resources include:
 - `pr://{owner}/{name}/unresolved`
 - `pr://{owner}/{name}/freshness`
 - `pr://dashboard/overview`
+- `pr://{owner}/{name}/{pr_number}/merge-readiness`
 - `pr://reviewer/{reviewer}/status`
 
 ## Running the CI checks locally
@@ -173,3 +207,6 @@ uv sync --extra dev && uv run ruff check . && uv run pyright && uv run pytest
 - `oss-context install-hooks` installs warning-only git hooks and refuses to overwrite unmanaged hooks.
 - Cross-repo dashboard queries are available directly from the CLI and MCP resources.
 - MCP search can find synced PRs and issues by free text or structured references like `owner/repo#123`.
+- Retrieval explanations expose provenance, confidence, and the exact reason a file/thread/reference was shown.
+- `oss-context doctor retrieval` checks for stale branch mappings, missing indexes, outdated code snapshots, and orphaned file references.
+- Semantic retrieval is intentionally not part of the default path; current branch/file context stays deterministic.
