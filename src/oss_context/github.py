@@ -25,7 +25,20 @@ from oss_context.settings import Settings
 
 
 class GitHubApiError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        http_status: int | None = None,
+        response_text: str | None = None,
+        operation: str | None = None,
+        repo: str | None = None,
+    ):
+        super().__init__(message)
+        self.http_status = http_status
+        self.response_text = response_text
+        self.operation = operation
+        self.repo = repo
 
 
 GraphQLPayload = dict[str, Any]
@@ -47,6 +60,8 @@ class GitHubClient:
         if settings.github_token:
             headers["Authorization"] = f"Bearer {settings.github_token}"
         self.client = httpx.AsyncClient(headers=headers, timeout=settings.request_timeout_seconds)
+        self.pr_total_estimate: int | None = None
+        self.issue_total_estimate: int | None = None
 
     async def __aenter__(self) -> GitHubClient:
         return self
@@ -54,7 +69,15 @@ class GitHubClient:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.client.aclose()
 
-    async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        operation: str | None = None,
+        repo: str | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
         target = url if url.startswith("http") else f"{self.settings.github_api_url}{url}"
         backoff_seconds = 1.0
         last_error: Exception | None = None
@@ -84,26 +107,60 @@ class GitHubClient:
                 if isinstance(exc, httpx.HTTPStatusError):
                     status = exc.response.status_code
                     if status not in {429, 500, 502, 503, 504} or attempt == 2:
-                        detail = exc.response.text[:500]
+                        detail = exc.response.text
+                        is_graphql = "graphql" in str(target).lower()
+                        api_type = "GraphQL" if is_graphql else "API"
                         raise GitHubApiError(
-                            f"GitHub API request failed ({status}): {detail}"
+                            f"GitHub {api_type} request failed",
+                            http_status=status,
+                            response_text=detail,
+                            operation=operation,
+                            repo=repo,
                         ) from exc
                 if attempt < 2:
                     await asyncio.sleep(backoff_seconds)
                     backoff_seconds *= 2
 
-        raise GitHubApiError("GitHub API request failed") from last_error
+        is_graphql = "graphql" in str(target).lower()
+        api_type = "GraphQL" if is_graphql else "API"
+        status_code = None
+        response_text = str(last_error)
+        if last_error and isinstance(last_error, httpx.HTTPStatusError):
+            status_code = last_error.response.status_code
+            response_text = last_error.response.text
+        raise GitHubApiError(
+            f"GitHub {api_type} request failed",
+            http_status=status_code,
+            response_text=response_text,
+            operation=operation,
+            repo=repo,
+        ) from last_error
 
-    async def _graphql(self, query: str, variables: GraphQLPayload) -> GraphQLPayload:
+    async def _graphql(
+        self,
+        query: str,
+        variables: GraphQLPayload,
+        *,
+        operation: str | None = None,
+        repo: str | None = None,
+    ) -> GraphQLPayload:
         response = await self._request(
             "POST",
             self.settings.github_graphql_url,
             headers={"Content-Type": "application/json"},
             json={"query": query, "variables": variables},
+            operation=operation,
+            repo=repo,
         )
         payload = response.json()
         if payload.get("errors"):
-            raise GitHubApiError(f"GitHub GraphQL error: {payload['errors']}")
+            raise GitHubApiError(
+                f"GitHub GraphQL error: {payload['errors']}",
+                http_status=response.status_code,
+                response_text=response.text,
+                operation=operation,
+                repo=repo,
+            )
         return payload["data"]
 
     def _parse_review_comment(self, comment: GraphQLPayload) -> ReviewCommentData | None:
@@ -131,6 +188,8 @@ class GitHubClient:
         self,
         thread_id: str,
         start_cursor: str,
+        *,
+        repo: RepoRef | None = None,
     ) -> list[ReviewCommentData]:
         query = """
         query ReviewThreadComments($threadId: ID!, $cursor: String) {
@@ -165,7 +224,12 @@ class GitHubClient:
         cursor: str | None = start_cursor
 
         while True:
-            data = await self._graphql(query, {"threadId": thread_id, "cursor": cursor})
+            data = await self._graphql(
+                query,
+                {"threadId": thread_id, "cursor": cursor},
+                operation="fetch_review_threads",
+                repo=repo.slug if repo else None,
+            )
             node = data.get("node") or {}
             comments_connection = node.get("comments") or {}
             for comment_node in comments_connection.get("nodes") or []:
@@ -181,7 +245,12 @@ class GitHubClient:
         return comments
 
     async def get_repo(self, repo: RepoRef) -> dict[str, Any]:
-        response = await self._request("GET", f"/repos/{repo.owner}/{repo.name}")
+        response = await self._request(
+            "GET",
+            f"/repos/{repo.owner}/{repo.name}",
+            operation="get_repo",
+            repo=repo.slug,
+        )
         return response.json()
 
     async def iter_pull_requests(
@@ -193,9 +262,29 @@ class GitHubClient:
             f"/repos/{repo.owner}/{repo.name}/pulls"
             "?state=all&sort=updated&direction=desc&per_page=100"
         )
+        self.pr_total_estimate = None
+        is_first = True
 
         while next_url:
-            response = await self._request("GET", next_url)
+            response = await self._request(
+                "GET",
+                next_url,
+                operation="iter_pull_requests",
+                repo=repo.slug,
+            )
+            if is_first:
+                last_url = response.links.get("last", {}).get("url")
+                if last_url:
+                    from urllib.parse import parse_qs, urlparse
+                    parsed = urlparse(last_url)
+                    pages = parse_qs(parsed.query).get("page")
+                    if pages:
+                        try:
+                            self.pr_total_estimate = int(pages[0]) * 100
+                        except ValueError:
+                            pass
+                is_first = False
+
             items = response.json()
             cutoff_reached = False
             for item in items:
@@ -215,7 +304,11 @@ class GitHubClient:
                     base_branch=(item.get("base") or {}).get("ref"),
                     head_branch=(item.get("head") or {}).get("ref"),
                     merge_commit_sha=item.get("merge_commit_sha"),
-                    labels=[label["name"] for label in item.get("labels", []) if label.get("name")],
+                    labels=[
+                        label["name"]
+                        for label in item.get("labels", [])
+                        if label.get("name")
+                    ],
                 )
             if cutoff_reached:
                 break
@@ -230,9 +323,29 @@ class GitHubClient:
             f"/repos/{repo.owner}/{repo.name}/issues"
             "?state=all&sort=updated&direction=desc&per_page=100"
         )
+        self.issue_total_estimate = None
+        is_first = True
 
         while next_url:
-            response = await self._request("GET", next_url)
+            response = await self._request(
+                "GET",
+                next_url,
+                operation="iter_issues",
+                repo=repo.slug,
+            )
+            if is_first:
+                last_url = response.links.get("last", {}).get("url")
+                if last_url:
+                    from urllib.parse import parse_qs, urlparse
+                    parsed = urlparse(last_url)
+                    pages = parse_qs(parsed.query).get("page")
+                    if pages:
+                        try:
+                            self.issue_total_estimate = int(pages[0]) * 100
+                        except ValueError:
+                            pass
+                is_first = False
+
             items = response.json()
             cutoff_reached = False
             for item in items:
@@ -252,7 +365,11 @@ class GitHubClient:
                     updated_at=updated_at,
                     closed_at=parse_github_datetime(item.get("closed_at")),
                     body=item.get("body"),
-                    labels=[label["name"] for label in item.get("labels", []) if label.get("name")],
+                    labels=[
+                        label["name"]
+                        for label in item.get("labels", [])
+                        if label.get("name")
+                    ],
                 )
             if cutoff_reached:
                 break
@@ -325,6 +442,8 @@ class GitHubClient:
                     "number": pr_number,
                     "cursor": cursor,
                 },
+                operation="fetch_review_threads",
+                repo=repo.slug,
             )
             pull_request = (data.get("repository") or {}).get("pullRequest") or {}
             review_threads = pull_request.get("reviewThreads") or {}
@@ -350,6 +469,7 @@ class GitHubClient:
                         await self._fetch_remaining_thread_comments(
                             node["id"],
                             comments_page_info["endCursor"],
+                            repo=repo,
                         )
                     )
 

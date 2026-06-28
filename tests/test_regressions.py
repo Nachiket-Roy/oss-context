@@ -190,3 +190,20 @@ def test_merge_readiness_scoring_priorities(tmp_path):
 
     finally:
         conn.close()
+
+
+def test_github_api_error_properties():
+    """Verify GitHubApiError retains HTTP status, response, operation, and repo slug."""
+    from oss_context.github import GitHubApiError
+    exc = GitHubApiError(
+        "failed",
+        http_status=403,
+        response_text='{"message": "rate limit"}',
+        operation="fetch_review_threads",
+        repo="lima-vm/lima",
+    )
+    assert exc.http_status == 403
+    assert exc.response_text == '{"message": "rate limit"}'
+    assert exc.operation == "fetch_review_threads"
+    assert exc.repo == "lima-vm/lima"
+    assert str(exc) == "failed"
