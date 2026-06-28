@@ -7,6 +7,7 @@ state, unresolved threads, dashboard summaries, and on-demand sync operations.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -53,7 +54,11 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         instructions=(
             "Provides pull-request and issue context from a local SQLite knowledge graph. "
             "Start with dashboard or unresolved-thread queries before asking for a "
-            "specific PR or issue context."
+            "specific PR or issue context. "
+            "IMPORTANT: When asked to generate an architectural or design summary, call "
+            "`get_raw_pr_context` to fetch the raw review history. Generate the summary using your "
+            "context window, and then proactively call `cache_design_summary` or "
+            "`cache_implementation_summary` to save your work to the knowledge graph."
         ),
     )
 
@@ -91,6 +96,88 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         finally:
             connection.close()
         return render_pr_context_markdown(payload)
+
+    @mcp.tool()
+    def get_raw_pr_context(repo: str, pr_number: int) -> dict:
+        """Get raw JSON review history for a PR, intended for IDE agents to synthesize summaries."""
+        normalized_repo = RepoRef.from_slug(repo).slug
+        connection = _connect()
+        try:
+            return get_pr_context_payload(connection, repo=normalized_repo, pr_number=pr_number)
+        finally:
+            connection.close()
+
+    @mcp.tool()
+    def cache_design_summary(
+        repo: str, target_type: str, target_number: int, summary: str
+    ) -> str:
+        """Cache an agent-generated design summary into the local SQLite graph."""
+        if target_type not in ("pr", "issue"):
+            return "Error: target_type must be 'pr' or 'issue'"
+        normalized_repo = RepoRef.from_slug(repo).slug
+        connection = _connect()
+        try:
+            owner, name = normalized_repo.split("/", 1)
+            repo_id = connection.execute(
+                "SELECT id FROM repos WHERE owner = ? AND name = ?", 
+                (owner, name)
+            ).fetchone()["id"]
+            if target_type == "pr":
+                target_id = connection.execute(
+                    "SELECT id FROM prs WHERE repo_id = ? AND number = ?", 
+                    (repo_id, target_number)
+                ).fetchone()["id"]
+            else:
+                target_id = connection.execute(
+                    "SELECT id FROM issues WHERE repo_id = ? AND number = ?", 
+                    (repo_id, target_number)
+                ).fetchone()["id"]
+            
+            now = datetime.now(UTC)
+            connection.execute(
+                "INSERT INTO design_summaries "
+                "(repo_id, target_type, target_id, summary, generated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (repo_id, target_type, target_id, summary, now)
+            )
+            connection.commit()
+            return f"Successfully cached {target_type} design summary."
+        except Exception as e:
+            return f"Error caching design summary: {e}"
+        finally:
+            connection.close()
+
+    @mcp.tool()
+    def cache_implementation_summary(
+        repo: str, pr_number: int, file_path: str, summary: str
+    ) -> str:
+        """Cache an agent-generated implementation summary for a specific file in a PR."""
+        normalized_repo = RepoRef.from_slug(repo).slug
+        connection = _connect()
+        try:
+            owner, name = normalized_repo.split("/", 1)
+            repo_id = connection.execute(
+                "SELECT id FROM repos WHERE owner = ? AND name = ?", 
+                (owner, name)
+            ).fetchone()["id"]
+            target_id = connection.execute(
+                "SELECT id FROM prs WHERE repo_id = ? AND number = ?", 
+                (repo_id, pr_number)
+            ).fetchone()["id"]
+            
+            now = datetime.now(UTC)
+            connection.execute(
+                "INSERT INTO implementation_summaries "
+                "(repo_id, target_type, target_id, file_path, summary, generated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (repo_id, "pr", target_id, file_path, summary, now)
+            )
+            connection.commit()
+            return "Successfully cached implementation summary."
+        except Exception as e:
+            return f"Error caching implementation summary: {e}"
+        finally:
+            connection.close()
 
     @mcp.tool()
     def get_issue_context(repo: str, issue_number: int) -> str:
