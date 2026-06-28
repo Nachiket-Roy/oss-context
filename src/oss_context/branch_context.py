@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from oss_context.models import RepoRef
 from oss_context.queries import (
+    get_file_implementation_summary,
     get_pr_context_payload,
     list_resolved_pr_decisions,
     list_unresolved_threads,
@@ -546,14 +547,22 @@ def get_branch_file_context(
         if reference.get("target_number") is not None or reference.get("url")
     ]
     
+    implementation_summary = get_file_implementation_summary(
+        connection,
+        repo=branch_context["repo"],
+        pr_number=branch_context["pr_number"],
+        file_path=relative_path,
+    )
+    
     resolved_history = []
+    rejected_ideas = []
     if not open_only:
         all_resolved = list_resolved_pr_decisions(
             connection,
             repo=branch_context["repo"],
             pr_number=branch_context["pr_number"],
         )
-        resolved_history = [
+        file_resolved = [
             {
                 **row,
                 "provenance": build_provenance(
@@ -568,11 +577,20 @@ def get_branch_file_context(
             if row["file_path"] not in {None, "—"} 
             and _file_matches(row["file_path"], relative_path)
         ]
+        resolved_history = [
+            row for row in file_resolved 
+            if row.get("decision_status") not in ("REJECTED", "SUPERSEDED")
+        ]
+        rejected_ideas = [
+            row for row in file_resolved 
+            if row.get("decision_status") in ("REJECTED", "SUPERSEDED")
+        ]
 
     provenance_items = [
         {"provenance": branch_context["provenance"]},
         *matching_threads,
         *resolved_history,
+        *rejected_ideas,
         *references,
     ]
     return {
@@ -582,8 +600,10 @@ def get_branch_file_context(
         "repo_root": branch_context["repo_root"],
         "resolution_source": branch_context["resolution_source"],
         "file_path": relative_path,
+        "implementation_summary": implementation_summary,
         "threads": matching_threads,
         "resolved_history": resolved_history,
+        "rejected_ideas": rejected_ideas,
         "references": references,
         "explain": explain,
         "provenance": branch_context["provenance"],

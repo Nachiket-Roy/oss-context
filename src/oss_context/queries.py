@@ -1089,3 +1089,30 @@ def list_resolved_pr_decisions(
         }
         for row in rows
     ]
+
+
+def get_file_implementation_summary(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+    pr_number: int,
+    file_path: str,
+) -> str | None:
+    """Fetch the synthesized implementation summary for a specific file in a PR."""
+    repo_ref = RepoRef.from_slug(repo)
+    query = """
+    SELECT s.summary
+    FROM implementation_summaries s
+    JOIN repos r ON r.id = s.repo_id
+    JOIN prs p ON p.id = s.target_id
+    WHERE r.owner = ? AND r.name = ?
+      AND s.target_type = 'pr'
+      AND p.number = ?
+      AND s.file_path = ?
+    ORDER BY s.generated_at DESC
+    LIMIT 1
+    """
+    row = connection.execute(
+        query, (repo_ref.owner, repo_ref.name, pr_number, file_path)
+    ).fetchone()
+    return row["summary"] if row else None

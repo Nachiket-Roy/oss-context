@@ -339,44 +339,76 @@ def render_branch_file_context(payload: dict) -> Panel:
     metrics.add_row("File", payload["file_path"])
     metrics.add_row("Resolution", payload["resolution_source"].replace("_", " "))
 
-    def _build_history_text(history: list[dict]) -> Text:
-        lines = ["Resolved review history:\n"]
+    def _format_reference(row: dict) -> str:
+        target = row.get("target_repo") or row.get("url") or row["raw_text"]
+        if row.get("target_repo") and row.get("target_number") is not None:
+            target = f"{row['target_repo']}#{row['target_number']}"
+        return f"- {row['source_label']} → {target}"
+
+    def _build_history_text(history: list[dict], title: str = "Resolved review history") -> Text:
+        lines = [f"{title}:\n"]
         for row in history:
+            if title == "Rejected ideas":
+                idea = row.get('extracted_summary') or row.get('decision_reason') or row['raw_text']
+                # Clean up newlines if it's just a bullet point
+                idea = str(idea).replace("\n", " ")
+                lines.append(f"- {idea}")
+                continue
+
             lines.append(f"- {row['reviewer']}:")
             text = "  " + "\n  ".join(row['raw_text'].splitlines())
             lines.append(text + "\n")
-            if row['decision_status'] in ('ACCEPTED', 'REJECTED'):
+            
+            if row.get('decision_status'):
+                if row.get('extracted_summary'):
+                    summary_text = "  " + "\n  ".join(str(row['extracted_summary']).splitlines())
+                    lines.append("  Decision:")
+                    lines.append(f"{summary_text}\n")
+                if row.get('decision_reason'):
+                    reason_text = "  " + "\n  ".join(str(row['decision_reason']).splitlines())
+                    lines.append("  Reason:")
+                    lines.append(f"{reason_text}\n")
                 lines.append("  Status:")
-                lines.append(f"  {row['decision_status'].capitalize()}.\n")
+                lines.append(f"  {row['decision_status'].upper()}\n")
             else:
                 outcome = (
                     row.get('extracted_summary') 
                     or row.get('decision_reason') 
                     or row['decision_status']
                 )
-                outcome_text = "  " + "\n  ".join(str(outcome).splitlines())
-                lines.append("  Outcome:")
-                lines.append(f"{outcome_text}\n")
+                if outcome:
+                    outcome_text = "  " + "\n  ".join(str(outcome).splitlines())
+                    lines.append("  Outcome:")
+                    lines.append(f"{outcome_text}\n")
         return Text("\n".join(lines).strip())
 
     if not payload["threads"]:
         body: list[RenderableType] = [
             metrics,
             Text(""),
-            Text("No unresolved threads for this file."),
         ]
+        if payload.get("implementation_summary"):
+            summary_lines = [
+                f"- {line.strip('- ')}"
+                for line in payload["implementation_summary"].splitlines()
+                if line.strip()
+            ]
+            summary_text = "\n".join(summary_lines)
+            body.extend([Text("Implementation summary:"), Text(summary_text), Text("")])
+        
+        body.append(Text("No unresolved threads for this file."))
+        
         if payload.get("resolved_history"):
             body.extend([Text(""), _build_history_text(payload["resolved_history"])])
+        if payload.get("rejected_ideas"):
+            body.extend([
+                Text(""),
+                _build_history_text(payload["rejected_ideas"], title="Rejected ideas")
+            ])
         if payload.get("references"):
             ref_lines = Text(
                 "Linked references:\n"
-                + "\n".join(
-                    (
-                        f"- {row['source_label']} → "
-                        f"{row.get('target_repo') or row.get('url') or row['raw_text']}"
-                    )
-                    for row in payload["references"]
-                )
+                + "\n".join(_format_reference(row) for row in payload["references"])
             )
             body.extend([Text(""), ref_lines])
         if payload.get("explain"):
@@ -409,9 +441,24 @@ def render_branch_file_context(payload: dict) -> Panel:
             row["summary"],
         )
 
-    sections: list[RenderableType] = [metrics, Text(""), table]
+    sections: list[RenderableType] = [metrics, Text("")]
+    if payload.get("implementation_summary"):
+        summary_lines = [
+            f"- {line.strip('- ')}"
+            for line in payload["implementation_summary"].splitlines()
+            if line.strip()
+        ]
+        summary_text = "\n".join(summary_lines)
+        sections.extend([Text("Implementation summary:"), Text(summary_text), Text("")])
+    sections.append(table)
+    
     if payload.get("resolved_history"):
         sections.extend([Text(""), _build_history_text(payload["resolved_history"])])
+    if payload.get("rejected_ideas"):
+        sections.extend([
+            Text(""),
+            _build_history_text(payload["rejected_ideas"], title="Rejected ideas")
+        ])
     if payload.get("references"):
         ref_table = Table(show_header=True)
         ref_table.title = "Linked references"
