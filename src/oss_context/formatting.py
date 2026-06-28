@@ -303,7 +303,7 @@ def render_branch_resolution(payload: dict) -> Panel:
     metrics.add_row("Branch", payload["branch"])
     metrics.add_row("PR", f"#{payload['pr_number']}")
     metrics.add_row("Resolution", payload["source"].replace("_", " "))
-    metrics.add_row("Repo root", payload["repo_root"])
+    metrics.add_row("Repo root", str(payload["repo_root"]))
     return Panel(metrics, title="Current branch PR", border_style="cyan")
 
 
