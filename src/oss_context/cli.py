@@ -52,6 +52,7 @@ from oss_context.formatting import (
     render_tracked_repos,
     render_unresolved_threads,
 )
+from oss_context.github import GitHubApiError
 from oss_context.hooks import HookInstallError, install_git_hooks
 from oss_context.mcp_server import run_mcp_server
 from oss_context.models import RepoRef
@@ -120,15 +121,42 @@ def sync(
     normalized_repo = _normalize_repo(repo)
     if normalized_repo is None:
         raise typer.BadParameter("--repo is required", param_hint="repo")
-    report = asyncio.run(
-        sync_repository(
-            normalized_repo,
-            settings,
-            extract_decisions=extract_decisions,
-            batch_size=batch_size,
+    try:
+        report = asyncio.run(
+            sync_repository(
+                normalized_repo,
+                settings,
+                extract_decisions=extract_decisions,
+                batch_size=batch_size,
+            )
         )
-    )
-    console.print(render_sync_report(report))
+        console.print(render_sync_report(report))
+    except GitHubApiError as exc:
+        is_graphql = "graphql" in str(exc).lower()
+        api_type = "GraphQL" if is_graphql else "API"
+        console.print(f"GitHub {api_type} request failed.\n")
+        if exc.repo:
+            console.print(f"Repository: {exc.repo}")
+        if exc.operation:
+            console.print(f"Operation: {exc.operation}")
+        if exc.http_status:
+            console.print(f"HTTP status: {exc.http_status}")
+        if exc.response_text:
+            console.print("Response:")
+            try:
+                import json
+                parsed = json.loads(exc.response_text)
+                console.print(json.dumps(parsed, indent=2))
+            except Exception:
+                console.print(exc.response_text)
+        else:
+            console.print(f"Error: {exc}")
+
+        console.print("\nHint:")
+        console.print("- Check GITHUB_TOKEN")
+        console.print("- Verify token permissions")
+        console.print("- Check rate limits")
+        raise typer.Exit(code=1) from None
 
 
 @app.command()

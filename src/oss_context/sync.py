@@ -321,6 +321,8 @@ async def sync_repository(
         raise ValueError("batch_size must be greater than zero")
 
     repo = RepoRef.from_slug(repo_slug)
+    print(f"Syncing {repo.slug}...", flush=True)
+
     report = SyncReport(repo=repo.slug, started_at=datetime.now(UTC))
     database = DatabaseManager(settings.db_path)
     connection = database.initialize()
@@ -328,14 +330,64 @@ async def sync_repository(
     try:
         async with GitHubClient(settings) as client:
             repo_payload = await client.get_repo(repo)
+            repo_id_val = repo_payload["id"]
+            default_branch_val = repo_payload.get("default_branch")
+
+            # Resolve last_synced_at from DB
+            row = connection.execute(
+                "SELECT last_synced_at FROM repos WHERE owner = ? AND name = ?",
+                (repo.owner, repo.name),
+            ).fetchone()
+            last_synced_at = (
+                datetime.fromisoformat(row["last_synced_at"]).astimezone(UTC)
+                if row and row["last_synced_at"]
+                else None
+            )
+
+            print("Fetching PRs...", flush=True)
+            prs_list = []
+            async for pull_request in client.iter_pull_requests(repo, since=last_synced_at):
+                prs_list.append(pull_request)
+                if len(prs_list) % 100 == 0:
+                    if client.pr_total_estimate:
+                        print(
+                            f"Fetched {len(prs_list)}/{client.pr_total_estimate} PRs",
+                            flush=True,
+                        )
+                    else:
+                        print(f"Fetched {len(prs_list)} PRs", flush=True)
+
+            if not prs_list:
+                print("Fetched 0 PRs", flush=True)
+            elif len(prs_list) % 100 != 0:
+                if client.pr_total_estimate:
+                    print(
+                        f"Fetched {len(prs_list)}/{client.pr_total_estimate} PRs",
+                        flush=True,
+                    )
+                else:
+                    print(f"Fetched {len(prs_list)} PRs", flush=True)
+
+            print("Fetching review threads...", flush=True)
+            pr_threads_map = {}
+            for pr in prs_list:
+                threads = await client.fetch_review_threads(repo, pr.number)
+                pr_threads_map[pr.number] = threads
+
+            print("Fetching issues...", flush=True)
+            issues_list = []
+            async for issue in client.iter_issues(repo, since=last_synced_at):
+                issues_list.append(issue)
+
+            print("Writing to database...", flush=True)
             repo_id, last_synced_at = _upsert_repo(
                 connection,
                 repo,
-                github_id=repo_payload["id"],
-                default_branch=repo_payload.get("default_branch"),
+                github_id=repo_id_val,
+                default_branch=default_branch_val,
             )
 
-            async for pull_request in client.iter_pull_requests(repo, since=last_synced_at):
+            for pull_request in prs_list:
                 pr_id = _upsert_pr(connection, repo_id, pull_request)
                 report.prs_synced += 1
                 report.references_extracted += _replace_references(
@@ -347,7 +399,7 @@ async def sync_repository(
                     text=pull_request.body,
                 )
 
-                threads = await client.fetch_review_threads(repo, pull_request.number)
+                threads = pr_threads_map.get(pull_request.number) or []
                 for thread in threads:
                     thread_id = _upsert_thread(connection, pr_id, thread)
                     report.threads_synced += 1
@@ -363,9 +415,9 @@ async def sync_repository(
                             text=comment.body,
                         )
 
-                connection.commit()
+            connection.commit()
 
-            async for issue in client.iter_issues(repo, since=last_synced_at):
+            for issue in issues_list:
                 issue_id = _upsert_issue(connection, repo_id, issue)
                 report.issues_synced += 1
                 report.references_extracted += _replace_references(
@@ -376,7 +428,8 @@ async def sync_repository(
                     source_id=issue_id,
                     text=issue.body,
                 )
-                connection.commit()
+
+            connection.commit()
 
             connection.execute(
                 "UPDATE repos SET last_synced_at = ? WHERE id = ?",
@@ -391,6 +444,8 @@ async def sync_repository(
                     repo_id=repo_id,
                     batch_size=batch_size,
                 )
+
+            print("Done.", flush=True)
 
         report.finished_at = datetime.now(UTC)
         return report
