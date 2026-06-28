@@ -190,7 +190,6 @@ CREATE INDEX IF NOT EXISTS idx_code_snapshots_repo_branch ON code_index_snapshot
 CREATE INDEX IF NOT EXISTS idx_code_snapshots_root_branch ON code_index_snapshots(
     repo_root, git_branch
 );
-CREATE INDEX IF NOT EXISTS idx_code_files_snapshot ON code_index_files(snapshot_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_code_symbols_name ON code_symbols(name, qualified_name, kind);
 CREATE INDEX IF NOT EXISTS idx_code_symbols_file ON code_symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_code_calls_callee ON code_calls(callee_name, caller_qualified_name);
