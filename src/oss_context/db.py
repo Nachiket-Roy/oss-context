@@ -119,6 +119,44 @@ CREATE TABLE IF NOT EXISTS extracted_references (
     target_sha TEXT
 );
 
+CREATE TABLE IF NOT EXISTS architectural_decisions (
+    id INTEGER PRIMARY KEY,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    pr_id INTEGER REFERENCES prs(id),
+    issue_id INTEGER REFERENCES issues(id),
+    summary TEXT NOT NULL,
+    rationale TEXT,
+    alternatives TEXT,
+    outcome TEXT,
+    created_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS design_summaries (
+    id INTEGER PRIMARY KEY,
+    target_type TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    summary TEXT NOT NULL,
+    generated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS implementation_summaries (
+    id INTEGER PRIMARY KEY,
+    target_type TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    generated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rationale_links (
+    id INTEGER PRIMARY KEY,
+    source_type TEXT NOT NULL,
+    source_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    relationship TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS llm_cache (
     comment_id INTEGER PRIMARY KEY REFERENCES review_comments(id),
     provider TEXT NOT NULL,
@@ -198,6 +236,10 @@ CREATE INDEX IF NOT EXISTS idx_refs_source ON extracted_references(source_kind, 
 CREATE INDEX IF NOT EXISTS idx_refs_target ON extracted_references(
     target_repo, target_number, reference_kind
 );
+CREATE INDEX IF NOT EXISTS idx_adr_repo ON architectural_decisions(repo_id);
+CREATE INDEX IF NOT EXISTS idx_design_target ON design_summaries(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_impl_target ON implementation_summaries(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_rationale_source ON rationale_links(source_type, source_id);
 """
 
 
@@ -217,5 +259,16 @@ class DatabaseManager:
     def initialize(self) -> sqlite3.Connection:
         connection = self.connect()
         connection.executescript(SCHEMA)
+        
+        # Migrations
+        try:
+            connection.execute("ALTER TABLE decision_log ADD COLUMN decision_status TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            connection.execute("ALTER TABLE decision_log ADD COLUMN decision_reason TEXT")
+        except sqlite3.OperationalError:
+            pass
+            
         connection.commit()
         return connection

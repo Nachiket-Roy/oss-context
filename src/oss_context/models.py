@@ -20,6 +20,14 @@ DecisionType = Literal[
     "ACKNOWLEDGMENT",
 ]
 
+DecisionStatus = Literal[
+    "OPEN",
+    "RESOLVED",
+    "ACCEPTED",
+    "REJECTED",
+    "SUPERSEDED",
+]
+
 ReferenceKind = Literal[
     "pull_request",
     "issue",
@@ -110,6 +118,8 @@ class ExtractedReference(BaseModel):
 class DecisionExtraction(BaseModel):
     decision_type: DecisionType
     summary: str
+    status: DecisionStatus | None = None
+    reason: str | None = None
     confidence: float
     provider: str
     model: str

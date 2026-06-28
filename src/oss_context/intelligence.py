@@ -144,9 +144,9 @@ async def analyze_pending_comments(
                     """
                     INSERT INTO decision_log(
                         pr_id, comment_id, decision_type, extracted_summary,
-                        raw_text, raw_text_hash, extracted_at
+                        raw_text, raw_text_hash, extracted_at, decision_status, decision_reason
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         pr_row["pr_id"],
@@ -156,6 +156,8 @@ async def analyze_pending_comments(
                         comment.body,
                         input_hash,
                         analyzed_at,
+                        decision.status,
+                        decision.reason,
                     ),
                 )
             extracted_count += 1
