@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from oss_context.models import RepoRef
 from oss_context.queries import (
     get_pr_context_payload,
-    list_resolved_file_decisions,
+    list_resolved_pr_decisions,
     list_unresolved_threads,
 )
 from oss_context.retrieval import build_provenance, summarize_provenance
@@ -548,12 +548,17 @@ def get_branch_file_context(
     
     resolved_history = []
     if not open_only:
-        resolved_history = list_resolved_file_decisions(
+        all_resolved = list_resolved_pr_decisions(
             connection,
             repo=branch_context["repo"],
             pr_number=branch_context["pr_number"],
-            file_path=relative_path,
         )
+        resolved_history = [
+            row
+            for row in all_resolved
+            if row["file_path"] not in {None, "—"} 
+            and _file_matches(row["file_path"], relative_path)
+        ]
 
     provenance_items = [
         {"provenance": branch_context["provenance"]},

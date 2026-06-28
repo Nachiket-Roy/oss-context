@@ -1047,17 +1047,17 @@ def get_reviewer_status(
     }
 
 
-def list_resolved_file_decisions(
+def list_resolved_pr_decisions(
     connection: sqlite3.Connection,
     *,
     repo: str,
     pr_number: int,
-    file_path: str,
 ) -> list[dict[str, Any]]:
-    """List resolved architectural decisions made on a specific file in a PR."""
+    """List resolved architectural decisions made on a PR, across all files."""
     repo_ref = RepoRef.from_slug(repo)
     query = """
     SELECT 
+        t.file_path,
         rc.author AS reviewer,
         rc.body AS raw_text,
         dl.decision_status,
@@ -1071,15 +1071,15 @@ def list_resolved_file_decisions(
     JOIN repos r ON r.id = p.repo_id
     WHERE r.owner = ? AND r.name = ? 
       AND p.number = ?
-      AND t.file_path = ?
       AND dl.decision_status IN ('RESOLVED', 'ACCEPTED', 'REJECTED', 'SUPERSEDED')
     ORDER BY rc.created_at ASC
     """
     rows = connection.execute(
-        query, (repo_ref.owner, repo_ref.name, pr_number, file_path)
+        query, (repo_ref.owner, repo_ref.name, pr_number)
     ).fetchall()
     return [
         {
+            "file_path": row["file_path"],
             "reviewer": row["reviewer"],
             "raw_text": row["raw_text"],
             "decision_status": row["decision_status"],

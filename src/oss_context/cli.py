@@ -693,7 +693,7 @@ def branch_file_context(
     ),
     explain: bool = typer.Option(False, help="Show retrieval reasons and confidence levels."),
     open_only: bool = typer.Option(
-        False, "--open-only", help="Restrict output to unresolved review threads only."
+        False, "--open-only", help="Exclude resolved review history from the output."
     ),
     db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
 ) -> None:
