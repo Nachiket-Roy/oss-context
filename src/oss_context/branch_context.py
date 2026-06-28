@@ -593,6 +593,18 @@ def get_branch_file_context(
         *rejected_ideas,
         *references,
     ]
+    if implementation_summary:
+        provenance_items.append(
+            {
+                "provenance": build_provenance(
+                    source_type="implementation_summary",
+                    source_id=relative_path,
+                    confidence="HIGH",
+                    retrieval_reason="exact_file_match",
+                    reason_detail=f"Implementation summary matches {relative_path}",
+                )
+            }
+        )
     return {
         "repo": branch_context["repo"],
         "pr_number": branch_context["pr_number"],
