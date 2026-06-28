@@ -554,7 +554,16 @@ def get_branch_file_context(
             pr_number=branch_context["pr_number"],
         )
         resolved_history = [
-            row
+            {
+                **row,
+                "provenance": build_provenance(
+                    source_type="resolved_decision",
+                    source_id=str(row["raw_text"]),
+                    confidence="HIGH",
+                    retrieval_reason="exact_file_match",
+                    reason_detail=f"Resolved decision thread matches {row['file_path']}",
+                ),
+            }
             for row in all_resolved
             if row["file_path"] not in {None, "—"} 
             and _file_matches(row["file_path"], relative_path)
@@ -563,6 +572,7 @@ def get_branch_file_context(
     provenance_items = [
         {"provenance": branch_context["provenance"]},
         *matching_threads,
+        *resolved_history,
         *references,
     ]
     return {
