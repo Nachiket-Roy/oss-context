@@ -49,8 +49,14 @@ The canonical command name is `oss-context`, and a short alias `ossc` is also in
 ## CLI examples
 
 ```bash
-# Sync a repository into the local knowledge graph
-ossc sync owner/repo
+# Sync a specific PR into the local knowledge graph (Just-In-Time)
+ossc sync owner/repo --pr 42
+
+# Sync a specific issue
+ossc sync owner/repo --issue 44
+
+# Sync a full repository history (Warning: may hit rate limits)
+ossc sync owner/repo --all
 
 # Show unresolved threads across all synced repositories
 oss-context query --unresolved
@@ -214,6 +220,7 @@ uv sync --extra dev && uv run ruff check . && uv run pyright && uv run pytest
 ## Notes
 
 - The SQLite database runs in WAL mode so sync and query operations can safely overlap.
+- Syncing operates on a Just-In-Time (JIT) architecture. The MCP server automatically fetches missing PRs and issues on-demand when requested by IDE agents, minimizing GitHub API rate limits.
 - Review thread state comes from GitHub review threads via GraphQL.
 - Repository sync now includes GitHub issues, so issues can be queried directly by number.
 - Structured references are extracted from PR bodies, issue bodies, and review comments.

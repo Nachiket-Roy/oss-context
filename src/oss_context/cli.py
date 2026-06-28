@@ -70,7 +70,7 @@ from oss_context.queries import (
 from oss_context.retrieval import run_retrieval_doctor
 from oss_context.review_assistant import get_merge_readiness_payload
 from oss_context.settings import load_settings
-from oss_context.sync import sync_repository
+from oss_context.sync import sync_repository, sync_single_issue, sync_single_pr
 from oss_context.web_ui import serve_web_ui
 
 app = typer.Typer(help="Track GitHub PR and issue context in a local SQLite knowledge graph.")
@@ -117,7 +117,7 @@ def sync(
     extract_decisions: bool = typer.Option(True, help="Run decision extraction after sync."),
     batch_size: int = typer.Option(10, min=1, help="Comments to analyze per LLM batch."),
     limit: int | None = typer.Option(
-        100,
+        None,
         help="Sync up to a custom number of PRs and issues.",
     ),
     all_history: bool = typer.Option(
@@ -129,11 +129,12 @@ def sync(
         None,
         help="Sync only work updated since duration (e.g. 90d, 24h, 1y).",
     ),
+    pr: int | None = typer.Option(None, help="Targeted sync of a single pull request."),
+    issue: int | None = typer.Option(None, help="Targeted sync of a single issue."),
 ) -> None:
     """Sync a GitHub repository into the local database.
 
-    By default, sync fetches the 100 most recently updated pull requests and issues.
-    Use --all for a complete repository history.
+    By default, requires explicit intent via --pr, --issue, --limit, or --all.
     """
     settings = _load_cli_settings(db_path)
     normalized_repo = _normalize_repo(repo)
@@ -168,6 +169,25 @@ def sync(
     sync_limit = None if all_history else limit
 
     try:
+        if pr:
+            console.print(f"Targeted sync of PR #{pr}...")
+            asyncio.run(sync_single_pr(normalized_repo, pr, settings))
+            console.print("Done.")
+            return
+
+        if issue:
+            console.print(f"Targeted sync of issue #{issue}...")
+            asyncio.run(sync_single_issue(normalized_repo, issue, settings))
+            console.print("Done.")
+            return
+
+        if sync_limit is None and not all_history and not since_override:
+            console.print(
+                "[red]No sync target specified.[/red] "
+                "Use --pr <num>, --issue <num>, --limit <N>, or --all."
+            )
+            raise typer.Exit(code=1)
+
         report = asyncio.run(
             sync_repository(
                 normalized_repo,

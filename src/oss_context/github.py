@@ -384,6 +384,72 @@ class GitHubClient:
                 break
             next_url = response.links.get("next", {}).get("url")
 
+    async def fetch_single_pull_request(self, repo: RepoRef, pr_number: int) -> PullRequestData:
+        response = await self._request(
+            "GET",
+            f"/repos/{repo.owner}/{repo.name}/pulls/{pr_number}",
+            operation="fetch_single_pull_request",
+            repo=repo.slug,
+        )
+        item = response.json()
+        return PullRequestData(
+            github_id=item["id"],
+            number=item["number"],
+            title=item["title"],
+            state=item["state"],
+            author=(item.get("user") or {}).get("login"),
+            created_at=parse_github_datetime(item.get("created_at")),
+            updated_at=parse_github_datetime(item.get("updated_at")),
+            body=item.get("body"),
+            base_branch=(item.get("base") or {}).get("ref"),
+            head_branch=(item.get("head") or {}).get("ref"),
+            merge_commit_sha=item.get("merge_commit_sha"),
+            labels=[
+                label["name"]
+                for label in item.get("labels", [])
+                if label.get("name")
+            ],
+        )
+
+    async def fetch_single_issue(self, repo: RepoRef, issue_number: int) -> IssueData:
+        response = await self._request(
+            "GET",
+            f"/repos/{repo.owner}/{repo.name}/issues/{issue_number}",
+            operation="fetch_single_issue",
+            repo=repo.slug,
+        )
+        item = response.json()
+        return IssueData(
+            github_id=item["id"],
+            number=item["number"],
+            title=item["title"],
+            state=item["state"],
+            author=(item.get("user") or {}).get("login"),
+            created_at=parse_github_datetime(item.get("created_at")),
+            updated_at=parse_github_datetime(item.get("updated_at")),
+            closed_at=parse_github_datetime(item.get("closed_at")),
+            body=item.get("body"),
+            labels=[
+                label["name"]
+                for label in item.get("labels", [])
+                if label.get("name")
+            ],
+        )
+
+    async def check_staleness(
+        self, repo: RepoRef, target_type: str, number: int
+    ) -> datetime | None:
+        """Returns the updated_at timestamp for a PR or Issue to check for staleness."""
+        endpoint = "pulls" if target_type == "pr" else "issues"
+        response = await self._request(
+            "GET",
+            f"/repos/{repo.owner}/{repo.name}/{endpoint}/{number}",
+            operation="check_staleness",
+            repo=repo.slug,
+        )
+        item = response.json()
+        return parse_github_datetime(item.get("updated_at"))
+
     async def fetch_review_threads(
         self,
         repo: RepoRef,
