@@ -275,13 +275,89 @@ class DatabaseManager:
             if "duplicate column name" not in str(e).lower():
                 raise
                 
-        # Phase 6 migrations for adding repo_id to caches
+        # Phase 6 migrations for adding repo_id to caches with strict constraints
         for table in ["design_summaries", "implementation_summaries", "rationale_links"]:
-            try:
-                connection.execute(f"ALTER TABLE {table} ADD COLUMN repo_id INTEGER")
-            except sqlite3.OperationalError as e:
-                if "duplicate column name" not in str(e).lower():
-                    raise
+            cursor = connection.execute(f"PRAGMA table_info({table})")
+            columns = {row["name"]: row for row in cursor.fetchall()}
+            
+            needs_rebuild = False
+            if "repo_id" not in columns:
+                needs_rebuild = True
+            elif not columns["repo_id"]["notnull"]:
+                needs_rebuild = True
+                
+            if needs_rebuild:
+                # Disable foreign keys for the rebuild
+                # Must be outside transaction
+                connection.commit()
+                connection.execute("PRAGMA foreign_keys = OFF;")
+                try:
+                    # Rename old table
+                    connection.execute(f"ALTER TABLE {table} RENAME TO {table}_old")
+                    
+                    # Recreate with new strict schema
+                    connection.executescript(SCHEMA)
+                    
+                    # Backfill data from old table, attempting to guess repo_id if missing.
+                    # If we can't safely resolve repo_id (e.g. multiple repos have PR #42), we discard the cache row.  # noqa: E501
+                    
+                    # Try to map target_id (PR/Issue number) to a single repo_id
+                    if table in ("design_summaries", "implementation_summaries"):
+                        connection.execute(f"""
+                            INSERT INTO {table} (
+                                id, repo_id, target_type, target_id, summary, generated_at
+                                {', file_path' if table == 'implementation_summaries' else ''}
+                            )
+                            SELECT o.id, 
+                                   COALESCE(
+                                       (SELECT repo_id FROM prs 
+                                        WHERE number = o.target_id 
+                                          AND o.target_type = 'pr' LIMIT 1),
+                                       (SELECT repo_id FROM issues 
+                                        WHERE number = o.target_id 
+                                          AND o.target_type = 'issue' LIMIT 1)
+                                   ),
+                                   o.target_type, o.target_id, o.summary, o.generated_at
+                                   {', o.file_path' if table == 'implementation_summaries' else ''}
+                            FROM {table}_old o
+                            WHERE (SELECT count(repo_id) FROM prs 
+                                   WHERE number = o.target_id AND o.target_type = 'pr') = 1
+                               OR (SELECT count(repo_id) FROM issues 
+                                   WHERE number = o.target_id AND o.target_type = 'issue') = 1
+                        """)
+                    elif table == "rationale_links":
+                        connection.execute(f"""
+                            INSERT INTO {table} (
+                                id, repo_id, source_type, source_id, 
+                                target_type, target_id, relationship
+                            )
+                            SELECT o.id, 
+                                   COALESCE(
+                                       (SELECT repo_id FROM prs 
+                                        WHERE number = o.source_id 
+                                          AND o.source_type = 'design_summary' LIMIT 1),
+                                       (SELECT repo_id FROM issues 
+                                        WHERE number = o.source_id 
+                                          AND o.source_type = 'design_summary' LIMIT 1)
+                                   ),
+                                   o.source_type, o.source_id, o.target_type, o.target_id, 
+                                   o.relationship
+                            FROM {table}_old o
+                            WHERE (SELECT count(repo_id) FROM prs 
+                                   WHERE number = o.source_id 
+                                     AND o.source_type = 'design_summary') = 1
+                               OR (SELECT count(repo_id) FROM issues 
+                                   WHERE number = o.source_id 
+                                     AND o.source_type = 'design_summary') = 1
+                        """)
+                        
+                    connection.execute(f"DROP TABLE {table}_old")
+                finally:
+                    connection.commit()
+                    connection.execute("PRAGMA foreign_keys = ON;")
+                    
+        # Re-run schema to recreate indexes that were attached to {table}_old and dropped
+        connection.executescript(SCHEMA)
             
         connection.commit()
         return connection
