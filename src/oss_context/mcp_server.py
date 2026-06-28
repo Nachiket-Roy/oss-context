@@ -7,12 +7,24 @@ state, unresolved threads, dashboard summaries, and on-demand sync operations.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastmcp import FastMCP
 
+from oss_context.code_index import (
+    get_combined_file_context,
+    get_impacted_files,
+    get_symbol_callees,
+    get_symbol_callers,
+    index_codebase,
+    search_symbols,
+)
 from oss_context.db import DatabaseManager
 from oss_context.markdown import (
     render_dashboard_markdown,
+    render_file_context_markdown,
     render_issue_context_markdown,
+    render_merge_readiness_markdown,
     render_pr_context_markdown,
     render_repo_sync_markdown,
     render_reviewer_status_markdown,
@@ -28,6 +40,7 @@ from oss_context.queries import (
     list_unresolved_threads,
     search_work_items,
 )
+from oss_context.review_assistant import get_merge_readiness_payload
 from oss_context.settings import Settings
 from oss_context.sync import sync_repository
 
@@ -170,6 +183,145 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         finally:
             connection.close()
 
+    @mcp.tool()
+    def index_code(
+        cwd: str | None = None,
+        repo: str | None = None,
+    ) -> dict:
+        """Index Python files from a local workspace into the SQLite code graph."""
+        normalized_repo = _normalize_repo(repo)
+        connection = _connect()
+        try:
+            return index_codebase(
+                connection,
+                cwd=Path(cwd) if cwd else None,
+                repo=normalized_repo,
+            )
+        finally:
+            connection.close()
+
+    @mcp.tool()
+    def search_code(
+        query: str,
+        repo: str | None = None,
+        branch: str | None = None,
+        limit: int = 25,
+    ) -> list[dict]:
+        """Search indexed symbols from the latest code snapshot scope."""
+        normalized_repo = _normalize_repo(repo)
+        connection = _connect()
+        try:
+            return search_symbols(
+                connection,
+                query=query,
+                repo=normalized_repo,
+                branch=branch,
+                limit=limit,
+            )
+        finally:
+            connection.close()
+
+    @mcp.tool()
+    def get_symbol_callers_tool(
+        symbol: str,
+        repo: str | None = None,
+        branch: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """List indexed callers for a symbol."""
+        normalized_repo = _normalize_repo(repo)
+        connection = _connect()
+        try:
+            return get_symbol_callers(
+                connection,
+                symbol=symbol,
+                repo=normalized_repo,
+                branch=branch,
+                limit=limit,
+            )
+        finally:
+            connection.close()
+
+    @mcp.tool()
+    def get_symbol_callees_tool(
+        symbol: str,
+        repo: str | None = None,
+        branch: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """List indexed outgoing calls made by a symbol."""
+        normalized_repo = _normalize_repo(repo)
+        connection = _connect()
+        try:
+            return get_symbol_callees(
+                connection,
+                symbol=symbol,
+                repo=normalized_repo,
+                branch=branch,
+                limit=limit,
+            )
+        finally:
+            connection.close()
+
+    @mcp.tool()
+    def get_impacted_files_tool(
+        symbol: str,
+        repo: str | None = None,
+        branch: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """List files directly impacted by a symbol and its callers."""
+        normalized_repo = _normalize_repo(repo)
+        connection = _connect()
+        try:
+            return get_impacted_files(
+                connection,
+                symbol=symbol,
+                repo=normalized_repo,
+                branch=branch,
+                limit=limit,
+            )
+        finally:
+            connection.close()
+
+    @mcp.tool()
+    def get_file_context(
+        file_path: str,
+        repo: str | None = None,
+        branch: str | None = None,
+        cwd: str | None = None,
+    ) -> str:
+        """Get combined code and review context for a file."""
+        normalized_repo = _normalize_repo(repo)
+        connection = _connect()
+        try:
+            payload = get_combined_file_context(
+                connection,
+                file_path=file_path,
+                repo=normalized_repo,
+                branch=branch,
+                cwd=Path(cwd) if cwd else None,
+            )
+        finally:
+            connection.close()
+        return render_file_context_markdown(payload)
+
+    @mcp.tool()
+    def get_merge_readiness(repo: str, pr_number: int, stale_days: int = 3) -> str:
+        """Summarize what remains before a PR is likely ready to merge."""
+        normalized_repo = RepoRef.from_slug(repo).slug
+        connection = _connect()
+        try:
+            payload = get_merge_readiness_payload(
+                connection,
+                repo=normalized_repo,
+                pr_number=pr_number,
+                stale_days=stale_days,
+            )
+        finally:
+            connection.close()
+        return render_merge_readiness_markdown(payload)
+
     @mcp.resource("pr://{owner}/{name}/{pr_number}/context")
     def pr_context_resource(owner: str, name: str, pr_number: int) -> str:
         """Read markdown PR context using a resource URI."""
@@ -212,6 +364,11 @@ def create_mcp_server(settings: Settings) -> FastMCP:
         finally:
             connection.close()
         return render_dashboard_markdown(summary)
+
+    @mcp.resource("pr://{owner}/{name}/{pr_number}/merge-readiness")
+    def merge_readiness_resource(owner: str, name: str, pr_number: int) -> str:
+        """Read markdown merge-readiness guidance for a PR."""
+        return get_merge_readiness(f"{owner}/{name}", pr_number)
 
     @mcp.resource("pr://reviewer/{reviewer}/status")
     def reviewer_resource(reviewer: str) -> str:

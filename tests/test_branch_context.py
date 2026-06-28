@@ -169,6 +169,14 @@ def _seed_branch_fixture(connection) -> None:
         """,
         (now.isoformat(),),
     )
+    connection.execute(
+        """
+        INSERT INTO extracted_references(
+            id, source_kind, source_id, repo_id, reference_kind, raw_text, url,
+            target_repo, target_number, target_sha
+        ) VALUES(1, 'pr', 1, 1, 'issue', 'issue 55', NULL, 'acme/widgets', 55, NULL)
+        """
+    )
     connection.commit()
 
 
@@ -286,11 +294,21 @@ def test_branch_file_context_filters_threads_for_target_file(tmp_path):
             file_path="auth.py",
             cwd=repo_root,
             runner=runner,
+            explain=True,
         )
         assert payload["repo"] == "acme/widgets"
         assert payload["pr_number"] == 42
         assert payload["file_path"] == "auth.py"
         assert len(payload["threads"]) == 1
         assert payload["threads"][0]["file_path"] == "src/auth.py"
+        assert payload["threads"][0]["provenance"]["confidence"] == "HIGH"
+        assert payload["threads"][0]["provenance"]["retrieval_reason"] == "exact_file_match"
+        assert (
+            payload["references"][0]["provenance"]["retrieval_reason"] == "explicit_issue_reference"
+        )
+        assert payload["retrieval_explanations"]
+        assert payload["excluded"] == [
+            "Semantic retrieval is not enabled; only deterministic context was returned."
+        ]
     finally:
         connection.close()

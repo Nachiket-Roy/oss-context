@@ -214,3 +214,86 @@ def render_repo_sync_markdown(status: dict) -> str:
             f"Blocking threads: {status['blocking_threads']}",
         ]
     )
+
+
+def render_file_context_markdown(payload: dict) -> str:
+    return "\n".join(
+        [
+            f"# File context · `{_md_code(payload['file_path'])}`",
+            "",
+            f"Repo: {_md_escape(payload['repo'] or 'local workspace')}",
+            f"Branch: {_md_escape(payload['branch'] or 'detached/unknown')}",
+            f"Commit: {_md_escape(payload['commit'] or 'unknown')}",
+            f"Indexed at: {_md_escape(payload['indexed_at'])}",
+            "",
+            "## Symbols",
+            _bullet_list(
+                [
+                    (
+                        f"`{_md_code(row['qualified_name'])}` · "
+                        f"{_md_escape(row['kind'])} · line {row['line_number']}"
+                    )
+                    for row in payload["symbols"]
+                ]
+            ),
+            "",
+            "## Outgoing calls",
+            _bullet_list(
+                [
+                    (
+                        f"`{_md_code(row['callee'])}` · count {row['call_count']} "
+                        f"· first line {row['first_line']}"
+                    )
+                    for row in payload["outbound_calls"]
+                ]
+            ),
+            "",
+            "## Inbound calls",
+            _bullet_list(
+                [
+                    (
+                        f"`{_md_code(row['caller'])}` in `{_md_code(row['file_path'])}` "
+                        f"· line {row['line_number']}"
+                    )
+                    for row in payload["inbound_calls"]
+                ]
+            ),
+            "",
+            "## Review history",
+            _bullet_list(
+                [
+                    f"PR #{row['pr_number']} · reviewer `{_md_code(row['reviewer'])}` · "
+                    f"{_md_escape(row['decision_type'])} · {_md_escape(row['summary'])}"
+                    for row in payload["review_history"]
+                ]
+            ),
+        ]
+    )
+
+
+def render_merge_readiness_markdown(payload: dict) -> str:
+    return "\n".join(
+        [
+            f"# Merge readiness · {_md_escape(payload['repo'])} PR #{payload['pr_number']}",
+            "",
+            f"Title: {_md_escape(payload['title'])}",
+            f"Author: {_md_escape(payload['author'] or 'unknown')}",
+            f"State: {_md_escape(payload['state'])}",
+            f"Health score: {payload['health_score']}",
+            f"Readiness score: {payload['merge_readiness_score']}",
+            f"Assessment: {_md_escape(payload['readiness_label'])}",
+            f"Unresolved threads: {payload['unresolved_threads']}",
+            f"Blocking threads: {payload['blocking_threads']}",
+            f"Waiting on author: {payload['waiting_on_author_threads']}",
+            f"Waiting on reviewer: {payload['waiting_on_reviewer_threads']}",
+            "",
+            "## Summary",
+            _bullet_list([_md_escape(payload["summary"])]),
+            "",
+            "## Recommended actions",
+            _bullet_list([_md_escape(item) for item in payload["recommended_actions"]]),
+            "",
+            "## Linked references",
+            _bullet_list([_md_escape(item) for item in payload["linked_references"]]),
+        ]
+    )

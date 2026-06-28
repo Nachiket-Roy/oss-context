@@ -7,7 +7,7 @@ dashboard summaries into readable panels and tables for CLI users.
 
 from __future__ import annotations
 
-from rich.console import Group
+from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -318,7 +318,16 @@ def render_branch_context(payload: dict) -> Group:
             "repo_root": payload["repo_root"],
         }
     )
-    return Group(resolution, Text(""), render_pr_context(payload["pr_context"]))
+    parts: list[RenderableType] = [resolution, Text(""), render_pr_context(payload["pr_context"])]
+    if payload.get("explain"):
+        explain_text = Text(
+            "Returned because:\n"
+            + "\n".join(f"- {line}" for line in payload["retrieval_explanations"])
+        )
+        parts.extend(
+            [Text(""), Panel(explain_text, title="Retrieval explanation", border_style="magenta")]
+        )
+    return Group(*parts)
 
 
 def render_branch_file_context(payload: dict) -> Panel:
@@ -331,20 +340,84 @@ def render_branch_file_context(payload: dict) -> Panel:
     metrics.add_row("Resolution", payload["resolution_source"].replace("_", " "))
 
     if not payload["threads"]:
-        return Panel(
-            Group(metrics, Text(""), Text("No unresolved threads for this file.")),
-            title="File context",
-            border_style="green",
-        )
+        body: list[RenderableType] = [
+            metrics,
+            Text(""),
+            Text("No unresolved threads for this file."),
+        ]
+        if payload.get("references"):
+            ref_lines = Text(
+                "Linked references:\n"
+                + "\n".join(
+                    (
+                        f"- {row['source_label']} → "
+                        f"{row.get('target_repo') or row.get('url') or row['raw_text']}"
+                    )
+                    for row in payload["references"]
+                )
+            )
+            body.extend([Text(""), ref_lines])
+        if payload.get("explain"):
+            explain = Text(
+                "Returned because:\n"
+                + "\n".join(f"- {line}" for line in payload["retrieval_explanations"])
+                + "\n\nExcluded:\n"
+                + "\n".join(f"- {line}" for line in payload["excluded"])
+            )
+            body.extend(
+                [Text(""), Panel(explain, title="Retrieval explanation", border_style="magenta")]
+            )
+        return Panel(Group(*body), title="File context", border_style="green")
 
     table = Table(show_header=True)
     table.add_column("Reviewer")
     table.add_column("Decision")
     table.add_column("Waiting on")
+    table.add_column("Confidence")
+    table.add_column("Reason")
     table.add_column("Summary", overflow="fold")
     for row in payload["threads"]:
-        table.add_row(row["reviewer"], row["decision_type"], row["waiting_on"], row["summary"])
-    return Panel(Group(metrics, Text(""), table), title="File context", border_style="yellow")
+        provenance = row["provenance"]
+        table.add_row(
+            row["reviewer"],
+            row["decision_type"],
+            row["waiting_on"],
+            provenance["confidence"],
+            provenance["retrieval_reason"],
+            row["summary"],
+        )
+
+    sections: list[RenderableType] = [metrics, Text(""), table]
+    if payload.get("references"):
+        ref_table = Table(show_header=True)
+        ref_table.title = "Linked references"
+        ref_table.add_column("Kind")
+        ref_table.add_column("Target")
+        ref_table.add_column("Confidence")
+        ref_table.add_column("Reason")
+        for row in payload["references"]:
+            provenance = row["provenance"]
+            target = row.get("target_repo") or row.get("url") or row["raw_text"]
+            if row.get("target_repo") and row.get("target_number") is not None:
+                target = f"{row['target_repo']}#{row['target_number']}"
+            ref_table.add_row(
+                row["reference_kind"],
+                str(target),
+                provenance["confidence"],
+                provenance["retrieval_reason"],
+            )
+        sections.extend([Text(""), ref_table])
+    if payload.get("explain"):
+        explain = Text(
+            "Returned because:\n"
+            + "\n".join(f"- {line}" for line in payload["retrieval_explanations"])
+            + "\n\nExcluded:\n"
+            + "\n".join(f"- {line}" for line in payload["excluded"])
+        )
+        sections.extend(
+            [Text(""), Panel(explain, title="Retrieval explanation", border_style="magenta")]
+        )
+    return Panel(Group(*sections), title="File context", border_style="yellow")
 
 
 def render_hook_installation(paths: list[str]) -> Panel:
@@ -409,3 +482,214 @@ def render_dashboard(summary: dict) -> Panel:
     content = Group(metrics, Text(""), repo_table, Text(""), reviewer_table)
     border_style = "red" if summary["blocking_threads"] else "green"
     return Panel(content, title="Dashboard", border_style=border_style)
+
+
+def render_code_index_report(report: dict) -> Panel:
+    """Render a local code-index run summary."""
+    metrics = Table.grid(padding=(0, 2))
+    metrics.add_row("Repo", report["repo"] or "local workspace")
+    metrics.add_row("Repo root", report["repo_root"])
+    metrics.add_row("Branch", report["branch"] or "detached/unknown")
+    metrics.add_row("Commit", report["commit"] or "unknown")
+    metrics.add_row("Snapshot", str(report["snapshot_id"]))
+    metrics.add_row("Files indexed", str(report["files_indexed"]))
+    metrics.add_row("Files parsed", str(report["files_parsed"]))
+    metrics.add_row("Files reused", str(report["files_reused"]))
+    metrics.add_row("Symbols", str(report["symbols_indexed"]))
+    metrics.add_row("Calls", str(report["calls_indexed"]))
+    metrics.add_row("Indexed at", report["indexed_at"])
+    if report["reused_snapshot"]:
+        metrics.add_row("Mode", "reused existing snapshot")
+    if report["skipped_files"]:
+        metrics.add_row("Skipped files", ", ".join(report["skipped_files"][:5]))
+    return Panel(metrics, title="Code index", border_style="cyan")
+
+
+def render_symbol_search(rows: list[dict], *, title: str) -> Panel:
+    """Render symbol search results."""
+    if not rows:
+        return Panel("No indexed symbols found.", title=title, border_style="yellow")
+
+    table = Table(show_header=True)
+    table.add_column("Repo")
+    table.add_column("Branch")
+    table.add_column("Kind")
+    table.add_column("Symbol")
+    table.add_column("File")
+    table.add_column("Line", justify="right")
+    for row in rows:
+        table.add_row(
+            row["repo"],
+            row["branch"] or "—",
+            row.get("kind", "—"),
+            row.get("qualified_name") or row.get("caller") or row.get("callee") or "—",
+            row["file_path"],
+            str(row.get("line_number") or "—"),
+        )
+    return Panel(table, title=title, border_style="blue")
+
+
+def render_impacted_files(rows: list[dict], *, symbol: str) -> Panel:
+    """Render files impacted by a symbol and its direct callers."""
+    if not rows:
+        return Panel(
+            "No impacted files found.", title=f"Impacted files · {symbol}", border_style="yellow"
+        )
+
+    table = Table(show_header=True)
+    table.add_column("Repo")
+    table.add_column("Branch")
+    table.add_column("File")
+    table.add_column("Reasons", overflow="fold")
+    for row in rows:
+        table.add_row(
+            row["repo"],
+            row["branch"] or "—",
+            row["file_path"],
+            ", ".join(row["reasons"]),
+        )
+    return Panel(table, title=f"Impacted files · {symbol}", border_style="magenta")
+
+
+def render_file_context_report(payload: dict) -> Panel:
+    """Render indexed file context plus historical review context."""
+    metrics = Table.grid(padding=(0, 2))
+    metrics.add_row("Repo", payload["repo"] or "local workspace")
+    metrics.add_row("File", payload["file_path"])
+    metrics.add_row("Branch", payload["branch"] or "detached/unknown")
+    metrics.add_row("Commit", payload["commit"] or "unknown")
+    metrics.add_row("Indexed at", payload["indexed_at"])
+
+    symbol_table = Table(show_header=True)
+    symbol_table.title = "Defined symbols"
+    symbol_table.add_column("Kind")
+    symbol_table.add_column("Qualified name")
+    symbol_table.add_column("Line", justify="right")
+    for row in payload["symbols"]:
+        symbol_table.add_row(row["kind"], row["qualified_name"], str(row["line_number"] or "—"))
+
+    outbound_table = Table(show_header=True)
+    outbound_table.title = "Outgoing calls"
+    outbound_table.add_column("Callee")
+    outbound_table.add_column("Count", justify="right")
+    outbound_table.add_column("First line", justify="right")
+    for row in payload["outbound_calls"]:
+        outbound_table.add_row(
+            row["callee"],
+            str(row["call_count"]),
+            str(row["first_line"] or "—"),
+        )
+
+    inbound_table = Table(show_header=True)
+    inbound_table.title = "Inbound calls"
+    inbound_table.add_column("Repo")
+    inbound_table.add_column("File")
+    inbound_table.add_column("Caller")
+    inbound_table.add_column("Line", justify="right")
+    for row in payload["inbound_calls"]:
+        inbound_table.add_row(
+            row["repo"],
+            row["file_path"],
+            row["caller"],
+            str(row["line_number"] or "—"),
+        )
+
+    history_table = Table(show_header=True)
+    history_table.title = "Review history"
+    history_table.add_column("PR")
+    history_table.add_column("Reviewer")
+    history_table.add_column("Decision")
+    history_table.add_column("State")
+    history_table.add_column("Summary", overflow="fold")
+    for row in payload["review_history"]:
+        history_table.add_row(
+            f"#{row['pr_number']} {row['pr_title']}",
+            row["reviewer"],
+            row["decision_type"],
+            row["thread_state"],
+            row["summary"],
+        )
+
+    sections: list[RenderableType] = [
+        metrics,
+        Text(""),
+        symbol_table if payload["symbols"] else Text("No indexed symbols for this file."),
+        Text(""),
+        outbound_table if payload["outbound_calls"] else Text("No outgoing calls indexed."),
+        Text(""),
+        inbound_table if payload["inbound_calls"] else Text("No inbound calls indexed."),
+        Text(""),
+        history_table if payload["review_history"] else Text("No historical review context found."),
+    ]
+    if payload.get("explain"):
+        explain_text = Text(
+            "Returned because:\n"
+            + "\n".join(f"- {line}" for line in payload["retrieval_explanations"])
+        )
+        sections.extend(
+            [Text(""), Panel(explain_text, title="Retrieval explanation", border_style="magenta")]
+        )
+    content = Group(*sections)
+    return Panel(content, title="File context", border_style="cyan")
+
+
+def render_merge_readiness(payload: dict) -> Panel:
+    """Render a merge-readiness summary and action plan for a PR."""
+    metrics = Table.grid(padding=(0, 2))
+    metrics.add_row("Repo", payload["repo"])
+    metrics.add_row("PR", f"#{payload['pr_number']} {payload['title']}")
+    metrics.add_row("Author", payload["author"] or "unknown")
+    metrics.add_row("State", payload["state"])
+    metrics.add_row("Health score", str(payload["health_score"]))
+    metrics.add_row("Readiness score", str(payload["merge_readiness_score"]))
+    metrics.add_row("Assessment", payload["readiness_label"])
+    metrics.add_row("Unresolved threads", str(payload["unresolved_threads"]))
+    metrics.add_row("Blocking threads", str(payload["blocking_threads"]))
+    metrics.add_row("Waiting on author", str(payload["waiting_on_author_threads"]))
+    metrics.add_row("Waiting on reviewer", str(payload["waiting_on_reviewer_threads"]))
+
+    actions = Text("\n".join(f"- {item}" for item in payload["recommended_actions"]))
+    references = Text(
+        "\n".join(f"- {item}" for item in payload["linked_references"])
+        if payload["linked_references"]
+        else "- none"
+    )
+    content = Group(
+        metrics,
+        Text(""),
+        Text(payload["summary"], style="bold"),
+        Text(""),
+        Text("Recommended actions", style="bold"),
+        actions,
+        Text(""),
+        Text("Linked references", style="bold"),
+        references,
+    )
+    border_style = "green" if payload["blocking_threads"] == 0 else "yellow"
+    return Panel(content, title="Merge readiness", border_style=border_style)
+
+
+def render_retrieval_doctor(report: dict) -> Panel:
+    """Render retrieval-quality diagnostics for local branch and index state."""
+    metrics = Table.grid(padding=(0, 2))
+    metrics.add_row("Healthy", "yes" if report["healthy"] else "no")
+    metrics.add_row("Stale branch links", str(len(report["stale_branch_links"])))
+    metrics.add_row("Missing code indexes", str(len(report["missing_code_indexes"])))
+    metrics.add_row("Outdated indexes", str(len(report["outdated_code_indexes"])))
+    metrics.add_row("Orphaned file references", str(len(report["orphaned_file_references"])))
+
+    details = Text()
+    for key, label in [
+        ("stale_branch_links", "Stale branch links"),
+        ("missing_code_indexes", "Missing code indexes"),
+        ("outdated_code_indexes", "Outdated code indexes"),
+        ("orphaned_file_references", "Orphaned file references"),
+    ]:
+        items = report[key]
+        details.append(f"{label}:\n", style="bold")
+        if not items:
+            details.append("- none\n")
+            continue
+        for item in items:
+            details.append(f"- {item}\n")
+    return Panel(Group(metrics, Text(""), details), title="Retrieval doctor", border_style="cyan")
