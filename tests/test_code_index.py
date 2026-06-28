@@ -174,7 +174,10 @@ def test_code_index_search_context_and_incremental_reuse(tmp_path):
         assert third_report["files_reused"] == 2
 
         # Fourth run: only service.py changes -> should reuse handlers.py
-        (repo_root / "service.py").write_text(UPDATED_SERVICE_SOURCE + "\n# dummy change", encoding="utf-8")
+        (repo_root / "service.py").write_text(
+            UPDATED_SERVICE_SOURCE + "\n# dummy change",
+            encoding="utf-8",
+        )
         fourth_report = index_codebase(connection, cwd=repo_root, repo="acme/widgets")
         assert fourth_report["reused_snapshot"] is False
         assert fourth_report["files_indexed"] == 2

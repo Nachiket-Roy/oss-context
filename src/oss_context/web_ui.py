@@ -192,7 +192,12 @@ def _issue_link(repo: str, issue_number: int, label: str | None = None) -> str:
     return f'<a href="/issue/{quote(owner)}/{quote(name)}/{issue_number}">{escape(text)}</a>'
 
 
-def _code_file_link(repo: str, file_path: str, label: str | None = None, branch: str | None = None) -> str:
+def _code_file_link(
+    repo: str,
+    file_path: str,
+    label: str | None = None,
+    branch: str | None = None,
+) -> str:
     """Render an internal indexed file-context link."""
     text = label or file_path
     if "/" not in repo or repo.startswith("/") or repo.count("/") != 1:
