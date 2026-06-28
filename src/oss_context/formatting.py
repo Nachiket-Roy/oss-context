@@ -349,7 +349,11 @@ def render_branch_file_context(payload: dict) -> Panel:
                 lines.append("  Status:")
                 lines.append(f"  {row['decision_status'].capitalize()}.\n")
             else:
-                outcome = row.get('extracted_summary') or row.get('decision_reason') or row['decision_status']
+                outcome = (
+                    row.get('extracted_summary') 
+                    or row.get('decision_reason') 
+                    or row['decision_status']
+                )
                 outcome_text = "  " + "\n  ".join(str(outcome).splitlines())
                 lines.append("  Outcome:")
                 lines.append(f"{outcome_text}\n")
