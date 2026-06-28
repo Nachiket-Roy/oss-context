@@ -404,14 +404,11 @@ class GitHubClient:
                   id
                   isResolved
                   isOutdated
-                  resolvedAt
                   resolvedBy {
                     login
                   }
                   path
                   line
-                  createdAt
-                  updatedAt
                   comments(first: 100) {
                     pageInfo {
                       hasNextPage
@@ -482,6 +479,10 @@ class GitHubClient:
                         )
                     )
 
+                thread_created_at = comments[0].created_at if comments else None
+                thread_updated_at = comments[-1].updated_at if comments else None
+                thread_resolved_at = thread_updated_at if state == "resolved" else None
+
                 threads.append(
                     ReviewThreadData(
                         github_thread_id=node["id"],
@@ -489,9 +490,9 @@ class GitHubClient:
                         line_number=node.get("line"),
                         thread_state=state,
                         resolved_by=(node.get("resolvedBy") or {}).get("login"),
-                        resolved_at=parse_github_datetime(node.get("resolvedAt")),
-                        created_at=parse_github_datetime(node.get("createdAt")),
-                        updated_at=parse_github_datetime(node.get("updatedAt")),
+                        resolved_at=thread_resolved_at,
+                        created_at=thread_created_at,
+                        updated_at=thread_updated_at,
                         comments=comments,
                     )
                 )
