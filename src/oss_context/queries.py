@@ -1045,3 +1045,47 @@ def get_reviewer_status(
         "waiting_on_author_threads": len(waiting_on_author),
         "threads": threads,
     }
+
+
+def list_resolved_pr_decisions(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+    pr_number: int,
+) -> list[dict[str, Any]]:
+    """List resolved architectural decisions made on a PR, across all files."""
+    repo_ref = RepoRef.from_slug(repo)
+    query = """
+    SELECT 
+        t.file_path,
+        rc.author AS reviewer,
+        rc.body AS raw_text,
+        dl.decision_status,
+        dl.decision_reason,
+        dl.extracted_summary,
+        rc.created_at
+    FROM decision_log dl
+    JOIN review_comments rc ON rc.id = dl.comment_id
+    JOIN review_threads t ON t.id = rc.thread_id
+    JOIN prs p ON p.id = t.pr_id
+    JOIN repos r ON r.id = p.repo_id
+    WHERE r.owner = ? AND r.name = ? 
+      AND p.number = ?
+      AND dl.decision_status IN ('RESOLVED', 'ACCEPTED', 'REJECTED', 'SUPERSEDED')
+    ORDER BY rc.created_at ASC
+    """
+    rows = connection.execute(
+        query, (repo_ref.owner, repo_ref.name, pr_number)
+    ).fetchall()
+    return [
+        {
+            "file_path": row["file_path"],
+            "reviewer": row["reviewer"],
+            "raw_text": row["raw_text"],
+            "decision_status": row["decision_status"],
+            "decision_reason": row["decision_reason"],
+            "extracted_summary": row["extracted_summary"],
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]

@@ -339,12 +339,34 @@ def render_branch_file_context(payload: dict) -> Panel:
     metrics.add_row("File", payload["file_path"])
     metrics.add_row("Resolution", payload["resolution_source"].replace("_", " "))
 
+    def _build_history_text(history: list[dict]) -> Text:
+        lines = ["Resolved review history:\n"]
+        for row in history:
+            lines.append(f"- {row['reviewer']}:")
+            text = "  " + "\n  ".join(row['raw_text'].splitlines())
+            lines.append(text + "\n")
+            if row['decision_status'] in ('ACCEPTED', 'REJECTED'):
+                lines.append("  Status:")
+                lines.append(f"  {row['decision_status'].capitalize()}.\n")
+            else:
+                outcome = (
+                    row.get('extracted_summary') 
+                    or row.get('decision_reason') 
+                    or row['decision_status']
+                )
+                outcome_text = "  " + "\n  ".join(str(outcome).splitlines())
+                lines.append("  Outcome:")
+                lines.append(f"{outcome_text}\n")
+        return Text("\n".join(lines).strip())
+
     if not payload["threads"]:
         body: list[RenderableType] = [
             metrics,
             Text(""),
             Text("No unresolved threads for this file."),
         ]
+        if payload.get("resolved_history"):
+            body.extend([Text(""), _build_history_text(payload["resolved_history"])])
         if payload.get("references"):
             ref_lines = Text(
                 "Linked references:\n"
@@ -388,6 +410,8 @@ def render_branch_file_context(payload: dict) -> Panel:
         )
 
     sections: list[RenderableType] = [metrics, Text(""), table]
+    if payload.get("resolved_history"):
+        sections.extend([Text(""), _build_history_text(payload["resolved_history"])])
     if payload.get("references"):
         ref_table = Table(show_header=True)
         ref_table.title = "Linked references"

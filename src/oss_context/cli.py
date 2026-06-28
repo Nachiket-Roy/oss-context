@@ -692,9 +692,12 @@ def branch_file_context(
         help="Skip GitHub CLI fallback and resolve only from local metadata and synced state.",
     ),
     explain: bool = typer.Option(False, help="Show retrieval reasons and confidence levels."),
+    open_only: bool = typer.Option(
+        False, "--open-only", help="Exclude resolved review history from the output."
+    ),
     db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
 ) -> None:
-    """Show unresolved review context for a file on the current branch PR."""
+    """Show review context for a file on the current branch PR."""
     normalized_repo = _normalize_repo(repo)
     settings = _load_cli_settings(db_path)
     connection = DatabaseManager(settings.db_path).initialize()
@@ -707,6 +710,7 @@ def branch_file_context(
             branch_name=branch,
             allow_gh_fallback=not no_gh_fallback,
             explain=explain,
+            open_only=open_only,
         )
         console.print(render_branch_file_context(payload))
     except (BranchContextError, ValueError) as exc:

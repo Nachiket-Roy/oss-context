@@ -17,7 +17,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 from oss_context.models import RepoRef
-from oss_context.queries import get_pr_context_payload, list_unresolved_threads
+from oss_context.queries import (
+    get_pr_context_payload,
+    list_resolved_pr_decisions,
+    list_unresolved_threads,
+)
 from oss_context.retrieval import build_provenance, summarize_provenance
 
 CommandRunner = Callable[[list[str], Path | None, bool], str | None]
@@ -493,8 +497,9 @@ def get_branch_file_context(
     allow_gh_fallback: bool = True,
     runner: CommandRunner = _run_command,
     explain: bool = False,
+    open_only: bool = False,
 ) -> dict[str, Any]:
-    """Assemble file-scoped unresolved review context for the current branch PR."""
+    """Assemble file-scoped review context for the current branch PR."""
     branch_context = get_branch_context_payload(
         connection,
         cwd=cwd,
@@ -540,9 +545,34 @@ def get_branch_file_context(
         for reference in branch_context["pr_context"]["references"]
         if reference.get("target_number") is not None or reference.get("url")
     ]
+    
+    resolved_history = []
+    if not open_only:
+        all_resolved = list_resolved_pr_decisions(
+            connection,
+            repo=branch_context["repo"],
+            pr_number=branch_context["pr_number"],
+        )
+        resolved_history = [
+            {
+                **row,
+                "provenance": build_provenance(
+                    source_type="resolved_decision",
+                    source_id=str(row["raw_text"]),
+                    confidence="HIGH",
+                    retrieval_reason="exact_file_match",
+                    reason_detail=f"Resolved decision thread matches {row['file_path']}",
+                ),
+            }
+            for row in all_resolved
+            if row["file_path"] not in {None, "—"} 
+            and _file_matches(row["file_path"], relative_path)
+        ]
+
     provenance_items = [
         {"provenance": branch_context["provenance"]},
         *matching_threads,
+        *resolved_history,
         *references,
     ]
     return {
@@ -553,9 +583,11 @@ def get_branch_file_context(
         "resolution_source": branch_context["resolution_source"],
         "file_path": relative_path,
         "threads": matching_threads,
+        "resolved_history": resolved_history,
         "references": references,
         "explain": explain,
         "provenance": branch_context["provenance"],
         "retrieval_explanations": summarize_provenance(provenance_items),
         "excluded": ["Semantic retrieval is not enabled; only deterministic context was returned."],
     }
+
