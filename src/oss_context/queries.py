@@ -1071,7 +1071,7 @@ def list_resolved_pr_decisions(
     JOIN repos r ON r.id = p.repo_id
     WHERE r.owner = ? AND r.name = ?
     AND p.number = ?
-    AND t.thread_state = 'resolved'
+    AND t.thread_state != 'active'
     ORDER BY rc.created_at ASC
     """
     rows = connection.execute(
