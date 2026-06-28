@@ -316,6 +316,8 @@ async def sync_repository(
     *,
     extract_decisions: bool = True,
     batch_size: int = 10,
+    limit: int | None = 100,
+    since_override: datetime | None = None,
 ) -> SyncReport:
     if batch_size <= 0:
         raise ValueError("batch_size must be greater than zero")
@@ -333,16 +335,19 @@ async def sync_repository(
             repo_id_val = repo_payload["id"]
             default_branch_val = repo_payload.get("default_branch")
 
-            # Resolve last_synced_at from DB
-            row = connection.execute(
-                "SELECT last_synced_at FROM repos WHERE owner = ? AND name = ?",
-                (repo.owner, repo.name),
-            ).fetchone()
-            last_synced_at = (
-                datetime.fromisoformat(row["last_synced_at"]).astimezone(UTC)
-                if row and row["last_synced_at"]
-                else None
-            )
+            if since_override is not None:
+                last_synced_at = since_override
+            else:
+                # Resolve last_synced_at from DB
+                row = connection.execute(
+                    "SELECT last_synced_at FROM repos WHERE owner = ? AND name = ?",
+                    (repo.owner, repo.name),
+                ).fetchone()
+                last_synced_at = (
+                    datetime.fromisoformat(row["last_synced_at"]).astimezone(UTC)
+                    if row and row["last_synced_at"]
+                    else None
+                )
 
             # Register/upsert repository slug
             repo_id, last_synced_at = _upsert_repo(
@@ -358,6 +363,33 @@ async def sync_repository(
             synced_prs_info = []
             async for pull_request in client.iter_pull_requests(repo, since=last_synced_at):
                 prs_buffer.append(pull_request)
+                if limit and len(synced_prs_info) + len(prs_buffer) >= limit:
+                    remaining = limit - len(synced_prs_info)
+                    prs_buffer = prs_buffer[:remaining]
+                    for pr in prs_buffer:
+                        pr_id = _upsert_pr(connection, repo_id, pr)
+                        synced_prs_info.append((pr_id, pr.number))
+                        report.prs_synced += 1
+                        report.references_extracted += _replace_references(
+                            connection,
+                            repo_id=repo_id,
+                            repo_slug=repo.slug,
+                            source_kind="pr",
+                            source_id=pr_id,
+                            text=pr.body,
+                        )
+                    connection.commit()
+                    prs_buffer.clear()
+
+                    if client.pr_total_estimate:
+                        print(
+                            f"Fetched {report.prs_synced}/{client.pr_total_estimate} PRs",
+                            flush=True,
+                        )
+                    else:
+                        print(f"Fetched {report.prs_synced} PRs", flush=True)
+                    break
+
                 if len(prs_buffer) == 100:
                     for pr in prs_buffer:
                         pr_id = _upsert_pr(connection, repo_id, pr)
@@ -442,6 +474,32 @@ async def sync_repository(
             issues_buffer = []
             async for issue in client.iter_issues(repo, since=last_synced_at):
                 issues_buffer.append(issue)
+                if limit and report.issues_synced + len(issues_buffer) >= limit:
+                    remaining = limit - report.issues_synced
+                    issues_buffer = issues_buffer[:remaining]
+                    for iss in issues_buffer:
+                        issue_id = _upsert_issue(connection, repo_id, iss)
+                        report.issues_synced += 1
+                        report.references_extracted += _replace_references(
+                            connection,
+                            repo_id=repo_id,
+                            repo_slug=repo.slug,
+                            source_kind="issue",
+                            source_id=issue_id,
+                            text=iss.body,
+                        )
+                    connection.commit()
+                    issues_buffer.clear()
+
+                    if client.issue_total_estimate:
+                        print(
+                            f"Fetched {report.issues_synced}/{client.issue_total_estimate} issues",
+                            flush=True,
+                        )
+                    else:
+                        print(f"Fetched {report.issues_synced} issues", flush=True)
+                    break
+
                 if len(issues_buffer) == 100:
                     for iss in issues_buffer:
                         issue_id = _upsert_issue(connection, repo_id, iss)

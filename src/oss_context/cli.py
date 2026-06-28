@@ -115,12 +115,57 @@ def sync(
     db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
     extract_decisions: bool = typer.Option(True, help="Run decision extraction after sync."),
     batch_size: int = typer.Option(10, min=1, help="Comments to analyze per LLM batch."),
+    limit: int | None = typer.Option(
+        100,
+        help="Sync up to a custom number of PRs and issues.",
+    ),
+    all_history: bool = typer.Option(
+        False,
+        "--all",
+        help="Sync full historical pull requests and issues.",
+    ),
+    since: str | None = typer.Option(
+        None,
+        help="Sync only work updated since duration (e.g. 90d, 24h, 1y).",
+    ),
 ) -> None:
-    """Sync a GitHub repository into the local database."""
+    """Sync a GitHub repository into the local database.
+
+    By default, sync fetches the 100 most recently updated pull requests and issues.
+    Use --all for a complete repository history.
+    """
     settings = _load_cli_settings(db_path)
     normalized_repo = _normalize_repo(repo)
     if normalized_repo is None:
         raise typer.BadParameter("--repo is required", param_hint="repo")
+
+    since_override = None
+    if since:
+        import re
+        from datetime import UTC, datetime, timedelta
+        match = re.match(r"^(\d+)([dhy])$", since.strip().lower())
+        if not match:
+            raise typer.BadParameter(
+                "Invalid since duration format. Use e.g. 90d, 24h, 1y",
+                param_hint="since",
+            )
+        value, unit = match.groups()
+        val = int(value)
+        if unit == "d":
+            delta = timedelta(days=val)
+        elif unit == "h":
+            delta = timedelta(hours=val)
+        elif unit == "y":
+            delta = timedelta(days=val * 365)
+        else:
+            raise typer.BadParameter(
+                "Unsupported unit. Use h (hours), d (days), or y (years)",
+                param_hint="since",
+            )
+        since_override = datetime.now(UTC) - delta
+
+    sync_limit = None if all_history else limit
+
     try:
         report = asyncio.run(
             sync_repository(
@@ -128,6 +173,8 @@ def sync(
                 settings,
                 extract_decisions=extract_decisions,
                 batch_size=batch_size,
+                limit=sync_limit,
+                since_override=since_override,
             )
         )
         console.print(render_sync_report(report))

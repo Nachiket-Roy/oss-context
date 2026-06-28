@@ -102,7 +102,7 @@ class GitHubClient:
 
                 response.raise_for_status()
                 return response
-            except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
                 last_error = exc
                 if isinstance(exc, httpx.HTTPStatusError):
                     status = exc.response.status_code
@@ -110,8 +110,11 @@ class GitHubClient:
                         detail = exc.response.text
                         is_graphql = "graphql" in str(target).lower()
                         api_type = "GraphQL" if is_graphql else "API"
+                        message = f"GitHub {api_type} request failed ({status})"
+                        if detail:
+                            message += f": {detail}"
                         raise GitHubApiError(
-                            f"GitHub {api_type} request failed",
+                            message,
                             http_status=status,
                             response_text=detail,
                             operation=operation,
@@ -128,8 +131,13 @@ class GitHubClient:
         if last_error and isinstance(last_error, httpx.HTTPStatusError):
             status_code = last_error.response.status_code
             response_text = last_error.response.text
+        message = f"GitHub {api_type} request failed"
+        if status_code:
+            message += f" ({status_code})"
+        if response_text:
+            message += f": {response_text}"
         raise GitHubApiError(
-            f"GitHub {api_type} request failed",
+            message,
             http_status=status_code,
             response_text=response_text,
             operation=operation,

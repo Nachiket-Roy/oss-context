@@ -207,3 +207,26 @@ def test_github_api_error_properties():
     assert exc.operation == "fetch_review_threads"
     assert exc.repo == "lima-vm/lima"
     assert str(exc) == "failed"
+
+
+def test_cli_sync_since_duration_parsing(tmp_path):
+    """Verify cli sync --since duration validation."""
+    from typer.testing import CliRunner
+
+    from oss_context.cli import app
+
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["sync", "lima-vm/lima", "--since", "invalid", "--db-path", str(tmp_path / "test.db")],
+    )
+    assert result.exit_code != 0
+    assert "Invalid since duration format" in result.output
+
+    result2 = runner.invoke(
+        app,
+        ["sync", "lima-vm/lima", "--since", "5m", "--db-path", str(tmp_path / "test.db")],
+    )
+    assert result2.exit_code != 0
+    assert "Invalid since duration format" in result2.output
