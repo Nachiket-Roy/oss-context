@@ -132,14 +132,13 @@ def _get_manual_link(
             """,
             (repo, branch_name),
         ).fetchone()
-        if row is None:
-            return None
-        return {
-            "repo": row["repo_slug"],
-            "pr_number": row["pr_number"],
-            "source": "manual_link",
-            "linked_at": row["linked_at"],
-        }
+        if row is not None:
+            return {
+                "repo": row["repo_slug"],
+                "pr_number": row["pr_number"],
+                "source": "manual_link",
+                "linked_at": row["linked_at"],
+            }
 
     rows = connection.execute(
         """
@@ -153,6 +152,8 @@ def _get_manual_link(
     if not rows:
         return None
     if len(rows) > 1:
+        if repo is not None:
+            return None
         raise BranchContextError(
             f"Branch {branch_name!r} is linked to multiple repos. Pass --repo to disambiguate."
         )
@@ -284,7 +285,48 @@ def resolve_branch_pr(
     """Resolve the pull request associated with the current branch."""
     worktree = get_git_worktree(cwd, runner=runner)
     resolved_branch = branch_name or worktree["branch"]
-    resolved_repo = repo or worktree["repo"]
+
+    resolved_repo = repo
+    if resolved_repo is None:
+        detected_repo = None
+        try:
+            remotes_str = runner(["git", "remote"], worktree["repo_root"], True)
+            remotes = (
+                [r.strip() for r in remotes_str.splitlines() if r.strip()]
+                if remotes_str
+                else ["origin"]
+            )
+        except Exception:
+            remotes = ["origin"]
+
+        remote_slugs = {}
+        for r_name in remotes:
+            try:
+                r_url = runner(
+                    ["git", "remote", "get-url", r_name],
+                    worktree["repo_root"],
+                    True,
+                )
+                if r_url:
+                    slug = parse_github_remote(r_url)
+                    if slug:
+                        remote_slugs[r_name] = slug
+            except Exception:
+                pass
+
+        rows = connection.execute("SELECT owner, name FROM repos").fetchall()
+        db_slugs = {f"{row['owner']}/{row['name']}" for row in rows}
+
+        if "upstream" in remote_slugs and remote_slugs["upstream"] in db_slugs:
+            detected_repo = remote_slugs["upstream"]
+        elif "origin" in remote_slugs and remote_slugs["origin"] in db_slugs:
+            detected_repo = remote_slugs["origin"]
+        else:
+            for slug in remote_slugs.values():
+                if slug in db_slugs:
+                    detected_repo = slug
+                    break
+        resolved_repo = detected_repo or worktree["repo"]
 
     manual_link = _get_manual_link(connection, branch_name=resolved_branch, repo=resolved_repo)
     if manual_link is not None:

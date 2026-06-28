@@ -261,3 +261,46 @@ def test_cli_sync_since_success(tmp_path):
         expected_delta = timedelta(days=90)
         delta = now - since_val
         assert abs(delta.total_seconds() - expected_delta.total_seconds()) < 60
+
+
+def test_resolve_branch_pr_with_fork_upstream(tmp_path):
+    """Verify that we resolve synced upstream repository when local remote is a fork."""
+    from oss_context.branch_context import resolve_branch_pr
+    from oss_context.db import DatabaseManager
+
+    connection = DatabaseManager(tmp_path / "test.db").initialize()
+    try:
+        connection.execute(
+            "INSERT INTO repos(github_id, owner, name) VALUES(1, 'lima-vm', 'lima')"
+        )
+        connection.commit()
+
+        def runner(args, cwd=None, allow_failure=False):
+            if args == ["git", "rev-parse", "--show-toplevel"]:
+                return str(tmp_path)
+            if args == ["git", "branch", "--show-current"]:
+                return "image-variant"
+            if args == ["git", "remote"]:
+                return "origin\nupstream\n"
+            if args == ["git", "remote", "get-url", "origin"]:
+                return "https://github.com/Nachiket-Roy/lima.git"
+            if args == ["git", "remote", "get-url", "upstream"]:
+                return "https://github.com/lima-vm/lima.git"
+            raise AssertionError(f"Unexpected: {args}")
+
+        connection.execute(
+            """
+            INSERT INTO branch_links(repo_slug, branch_name, pr_number, linked_at)
+            VALUES('lima-vm/lima', 'image-variant', 5159, '2026-06-28 12:00:00')
+            """
+        )
+        connection.commit()
+
+        resolved = resolve_branch_pr(connection, runner=runner)
+        assert resolved["repo"] == "lima-vm/lima"
+        assert resolved["pr_number"] == 5159
+        assert resolved["branch"] == "image-variant"
+        assert resolved["source"] == "manual_link"
+
+    finally:
+        connection.close()
