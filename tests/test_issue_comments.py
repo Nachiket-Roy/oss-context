@@ -45,8 +45,9 @@ def test_issue_comments_schema_initialization(tmp_path):
 
 @pytest.mark.asyncio
 async def test_fetch_issue_comments_client(monkeypatch):
-    from oss_context.settings import Settings
     from pathlib import Path
+
+    from oss_context.settings import Settings
     settings = Settings(db_path=Path(":memory:"), github_token="mock-token")
     client = GitHubClient(settings)
 
