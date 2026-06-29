@@ -15,12 +15,12 @@ from typing import Any
 import httpx
 
 from oss_context.models import (
+    IssueCommentData,
     IssueData,
     PullRequestData,
     RepoRef,
     ReviewCommentData,
     ReviewThreadData,
-    IssueCommentData,
 )
 from oss_context.settings import Settings
 

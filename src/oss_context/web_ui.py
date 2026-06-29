@@ -433,7 +433,10 @@ def _reference_target(reference: dict[str, Any]) -> str:
         if url:
             safe_url = _safe_external_link(url)
             if safe_url is not None:
-                return f'<a href="{escape(safe_url, quote=True)}" target="_blank">{escape(text)}</a>'
+                return (
+                    f'<a href="{escape(safe_url, quote=True)}" target="_blank">'
+                    f"{escape(text)}</a>"
+                )
         return f"<code>{escape(text)}</code>"
     if repo and number is not None and kind == "pull_request":
         return _pr_link(repo, number)

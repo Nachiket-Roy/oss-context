@@ -713,8 +713,12 @@ def get_issue_references(
             NULL AS file_path
         FROM issues i
         JOIN repos r ON r.id = i.repo_id
-        LEFT JOIN extracted_references er ON (er.source_kind = 'issue' AND er.source_id = i.id)
-            OR (er.source_kind = 'issue_comment' AND er.source_id IN (SELECT id FROM issue_comments WHERE issue_id = i.id))
+        LEFT JOIN extracted_references er ON
+            (er.source_kind = 'issue' AND er.source_id = i.id)
+            OR (
+                er.source_kind = 'issue_comment'
+                AND er.source_id IN (SELECT id FROM issue_comments WHERE issue_id = i.id)
+            )
         LEFT JOIN issue_comments ic ON er.source_kind = 'issue_comment' AND ic.id = er.source_id
         WHERE r.owner = ? AND r.name = ? AND i.number = ? AND er.id IS NOT NULL
         ORDER BY er.source_kind ASC, ic.created_at ASC, er.id ASC
@@ -766,9 +770,14 @@ def get_issue_backreferences(
         if row["source_kind"] == "pr":
             source_label = f"PR #{row['pr_number']} {row['pr_title']}"
         elif row["source_kind"] == "issue":
-            source_label = f"Issue #{row['source_issue_number']} {row['source_issue_title']}"
+            source_label = (
+                f"Issue #{row['source_issue_number']} {row['source_issue_title']}"
+            )
         elif row["source_kind"] == "issue_comment":
-            source_label = f"Comment by {row['author'] or 'unknown'} on Issue #{row['source_issue_number']} {row['source_issue_title']}"
+            source_label = (
+                f"Comment by {row['author'] or 'unknown'} on Issue "
+                f"#{row['source_issue_number']} {row['source_issue_title']}"
+            )
         else:
             source_label = f"Comment by {row['author'] or 'unknown'}"
         result.append(

@@ -15,13 +15,13 @@ from oss_context.db import DatabaseManager
 from oss_context.github import GitHubClient
 from oss_context.intelligence import analyze_pending_comments
 from oss_context.models import (
+    IssueCommentData,
     IssueData,
     PullRequestData,
     RepoRef,
     ReviewCommentData,
     ReviewThreadData,
     SyncReport,
-    IssueCommentData,
 )
 from oss_context.references import extract_references
 from oss_context.settings import Settings
@@ -68,8 +68,9 @@ def _upsert_repo(
 
 
 def _fetch_discussion_title(url: str) -> str | None:
-    import httpx
     import re
+
+    import httpx
     try:
         response = httpx.get(url, headers={"User-Agent": "oss-context"}, timeout=5.0)
         if response.status_code == 200:
@@ -657,7 +658,9 @@ async def sync_repository(
         connection.close()
 
 
-async def sync_single_pr(repo_slug: str, pr_number: int, settings: Settings, _depth: int = 1) -> None:
+async def sync_single_pr(
+    repo_slug: str, pr_number: int, settings: Settings, _depth: int = 1
+) -> None:
     """Targeted JIT sync for a single PR, including its threads and comments."""
     repo = RepoRef.from_slug(repo_slug)
     connection = DatabaseManager(settings.db_path).initialize()
@@ -708,7 +711,9 @@ async def sync_single_pr(repo_slug: str, pr_number: int, settings: Settings, _de
         )
 
 
-async def sync_single_issue(repo_slug: str, issue_number: int, settings: Settings, _depth: int = 1) -> None:
+async def sync_single_issue(
+    repo_slug: str, issue_number: int, settings: Settings, _depth: int = 1
+) -> None:
     """Targeted JIT sync for a single issue."""
     repo = RepoRef.from_slug(repo_slug)
     connection = DatabaseManager(settings.db_path).initialize()
@@ -773,7 +778,10 @@ async def _sync_nested_references(
                 FROM extracted_references 
                 WHERE repo_id = ? AND (
                     (source_kind = 'issue' AND source_id = ?) OR
-                    (source_kind = 'issue_comment' AND source_id IN (SELECT id FROM issue_comments WHERE issue_id = ?))
+                    (
+                        source_kind = 'issue_comment'
+                        AND source_id IN (SELECT id FROM issue_comments WHERE issue_id = ?)
+                    )
                 )
                 """,
                 (repo_id, source_id, source_id)
@@ -811,20 +819,35 @@ async def _sync_nested_references(
 
         try:
             if ref_kind == "pull_request":
-                await ensure_pr_synced(target_repo, target_number, settings, force_sync=False, _depth=depth)
+                await ensure_pr_synced(
+                    target_repo, target_number, settings, force_sync=False, _depth=depth
+                )
             elif ref_kind == "issue":
-                await ensure_issue_synced(target_repo, target_number, settings, force_sync=False, _depth=depth)
+                await ensure_issue_synced(
+                    target_repo, target_number, settings, force_sync=False, _depth=depth
+                )
             elif ref_kind == "issue_or_pr":
                 try:
-                    await ensure_pr_synced(target_repo, target_number, settings, force_sync=False, _depth=depth)
+                    await ensure_pr_synced(
+                        target_repo, target_number, settings, force_sync=False, _depth=depth
+                    )
                 except Exception:
-                    await ensure_issue_synced(target_repo, target_number, settings, force_sync=False, _depth=depth)
+                    await ensure_issue_synced(
+                        target_repo, target_number, settings, force_sync=False, _depth=depth
+                    )
         except Exception as e:
-            print(f"Warning: Failed to sync referenced {ref_kind} #{target_number}: {e}", flush=True)
+            print(
+                f"Warning: Failed to sync referenced {ref_kind} #{target_number}: {e}",
+                flush=True,
+            )
 
 
 async def ensure_pr_synced(
-    repo_slug: str, pr_number: int, settings: Settings, force_sync: bool = False, _depth: int = 1
+    repo_slug: str,
+    pr_number: int,
+    settings: Settings,
+    force_sync: bool = False,
+    _depth: int = 1,
 ) -> None:
     repo = RepoRef.from_slug(repo_slug)
     connection = DatabaseManager(settings.db_path).initialize()
@@ -859,7 +882,11 @@ async def ensure_pr_synced(
 
 
 async def ensure_issue_synced(
-    repo_slug: str, issue_number: int, settings: Settings, force_sync: bool = False, _depth: int = 1
+    repo_slug: str,
+    issue_number: int,
+    settings: Settings,
+    force_sync: bool = False,
+    _depth: int = 1,
 ) -> None:
     repo = RepoRef.from_slug(repo_slug)
     connection = DatabaseManager(settings.db_path).initialize()

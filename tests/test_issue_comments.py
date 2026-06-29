@@ -1,20 +1,20 @@
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-import sqlite3
 
 from oss_context.db import DatabaseManager
+from oss_context.formatting import render_issue_context
 from oss_context.github import GitHubClient
-from oss_context.models import RepoRef, IssueCommentData, IssueData
-from oss_context.sync import sync_single_issue, sync_repository
+from oss_context.markdown import render_issue_context_markdown
+from oss_context.models import IssueCommentData, IssueData, RepoRef
 from oss_context.queries import (
+    get_issue_backreferences,
     get_issue_comments,
     get_issue_context_payload,
     get_issue_references,
-    get_issue_backreferences,
 )
-from oss_context.markdown import render_issue_context_markdown
-from oss_context.formatting import render_issue_context
+from oss_context.sync import sync_repository, sync_single_issue
 from oss_context.web_ui import _render_issue_body
 
 
@@ -46,7 +46,8 @@ def test_issue_comments_schema_initialization(tmp_path):
 @pytest.mark.asyncio
 async def test_fetch_issue_comments_client(monkeypatch):
     from oss_context.settings import Settings
-    settings = Settings(db_path=":memory:", github_token="mock-token")
+    from pathlib import Path
+    settings = Settings(db_path=Path(":memory:"), github_token="mock-token")
     client = GitHubClient(settings)
 
     mock_response = MagicMock()
@@ -125,14 +126,17 @@ async def test_sync_single_issue_with_comments(tmp_path):
         issue_id = row["id"]
 
         # Check comment
-        c_row = connection.execute("SELECT author, body FROM issue_comments WHERE issue_id = ?", (issue_id,)).fetchone()
+        c_row = connection.execute(
+            "SELECT author, body FROM issue_comments WHERE issue_id = ?", (issue_id,)
+        ).fetchone()
         assert c_row is not None
         assert c_row["author"] == "suda"
         assert c_row["body"] == "Review comment pointing to lima-vm/finch#123"
 
         # Check reference extraction from comment
         ref_rows = connection.execute(
-            "SELECT source_kind, target_repo, target_number FROM extracted_references WHERE source_kind = 'issue_comment'"
+            "SELECT source_kind, target_repo, target_number FROM extracted_references "
+            "WHERE source_kind = 'issue_comment'"
         ).fetchall()
         assert len(ref_rows) == 1
         assert ref_rows[0]["target_repo"] == "lima-vm/finch"
@@ -204,31 +208,49 @@ def test_issue_comments_queries_and_backreferences(tmp_path):
             "VALUES(1, 10, 'lima-vm', 'lima', 'main', '2026-06-29T10:00:00Z')"
         )
         connection.execute(
-            "INSERT INTO issues(id, github_id, repo_id, number, title, state, author, created_at, updated_at, body) "
-            "VALUES(10, 999, 1, 5152, 'WSL2 Support', 'open', 'nachiket', '2026-06-29T09:00:00Z', '2026-06-29T09:30:00Z', 'Body')"
+            "INSERT INTO issues("
+            "id, github_id, repo_id, number, title, state, author, "
+            "created_at, updated_at, body) "
+            "VALUES(10, 999, 1, 5152, 'WSL2 Support', 'open', 'nachiket', "
+            "'2026-06-29T09:00:00Z', '2026-06-29T09:30:00Z', 'Body')"
         )
         # Seed Comment
         connection.execute(
-            "INSERT INTO issue_comments(id, issue_id, github_comment_id, author, body, created_at, updated_at, reaction_count) "
-            "VALUES(50, 10, 200, 'suda', 'Nice template work! #3991', '2026-06-29T09:05:00Z', '2026-06-29T09:10:00Z', 1)"
+            "INSERT INTO issue_comments("
+            "id, issue_id, github_comment_id, author, body, "
+            "created_at, updated_at, reaction_count) "
+            "VALUES(50, 10, 200, 'suda', 'Nice template work! #3991', "
+            "'2026-06-29T09:05:00Z', '2026-06-29T09:10:00Z', 1)"
         )
         # Seed Reference from comment
         connection.execute(
-            "INSERT INTO extracted_references(source_kind, source_id, repo_id, reference_kind, raw_text, url, target_repo, target_number) "
-            "VALUES('issue_comment', 50, 1, 'issue_or_pr', '#3991', NULL, 'lima-vm/lima', 3991)"
+            "INSERT INTO extracted_references("
+            "source_kind, source_id, repo_id, reference_kind, raw_text, url, "
+            "target_repo, target_number) "
+            "VALUES('issue_comment', 50, 1, 'issue_or_pr', '#3991', NULL, "
+            "'lima-vm/lima', 3991)"
         )
         # Seed another Issue pointing to #5152 via comment
         connection.execute(
-            "INSERT INTO issues(id, github_id, repo_id, number, title, state, author, created_at, updated_at, body) "
-            "VALUES(11, 998, 1, 3991, 'Ubuntu image', 'open', 'alice', '2026-06-29T09:00:00Z', '2026-06-29T09:30:00Z', 'Body')"
+            "INSERT INTO issues("
+            "id, github_id, repo_id, number, title, state, author, "
+            "created_at, updated_at, body) "
+            "VALUES(11, 998, 1, 3991, 'Ubuntu image', 'open', 'alice', "
+            "'2026-06-29T09:00:00Z', '2026-06-29T09:30:00Z', 'Body')"
         )
         connection.execute(
-            "INSERT INTO issue_comments(id, issue_id, github_comment_id, author, body, created_at, updated_at, reaction_count) "
-            "VALUES(51, 11, 201, 'bob', 'Links to #5152', '2026-06-29T09:06:00Z', '2026-06-29T09:06:00Z', 0)"
+            "INSERT INTO issue_comments("
+            "id, issue_id, github_comment_id, author, body, "
+            "created_at, updated_at, reaction_count) "
+            "VALUES(51, 11, 201, 'bob', 'Links to #5152', "
+            "'2026-06-29T09:06:00Z', '2026-06-29T09:06:00Z', 0)"
         )
         connection.execute(
-            "INSERT INTO extracted_references(source_kind, source_id, repo_id, reference_kind, raw_text, url, target_repo, target_number) "
-            "VALUES('issue_comment', 51, 1, 'issue', '#5152', NULL, 'lima-vm/lima', 5152)"
+            "INSERT INTO extracted_references("
+            "source_kind, source_id, repo_id, reference_kind, raw_text, url, "
+            "target_repo, target_number) "
+            "VALUES('issue_comment', 51, 1, 'issue', '#5152', NULL, "
+            "'lima-vm/lima', 5152)"
         )
         connection.commit()
 
@@ -357,19 +379,20 @@ async def test_recursive_jit_sync(tmp_path):
 
 
 def test_discussion_reference(tmp_path):
+    from oss_context.formatting import render_issue_context
+    from oss_context.markdown import render_issue_context_markdown
+    from oss_context.queries import get_issue_references
     from oss_context.references import extract_references
     from oss_context.sync import _replace_references
-    from oss_context.queries import get_issue_references
-    from oss_context.markdown import render_issue_context_markdown
-    from oss_context.formatting import render_issue_context
     from oss_context.web_ui import _render_issue_body
 
-    text = "This matches https://github.com/lima-vm/lima/discussions/3829 in conversation."
+    url_str = "https://github.com/lima-vm/lima/discussions/3829"
+    text = f"This matches {url_str} in conversation."
     refs = extract_references(text, repo="lima-vm/lima")
     assert len(refs) == 1
     assert refs[0].kind == "discussion"
     assert refs[0].target_number == 3829
-    assert refs[0].url == "https://github.com/lima-vm/lima/discussions/3829"
+    assert refs[0].url == url_str
 
     # Setup database with migrated schemas
     db_path = tmp_path / "test.db"
@@ -381,8 +404,10 @@ def test_discussion_reference(tmp_path):
             "VALUES(1, 10, 'lima-vm', 'lima', 'main', '2026-06-29T10:00:00Z')"
         )
         connection.execute(
-            "INSERT INTO issues(id, github_id, repo_id, number, title, state, author, created_at, updated_at, body) "
-            "VALUES(10, 999, 1, 5152, 'WSL2 Support', 'open', 'nachiket', '2026-06-29T09:00:00Z', '2026-06-29T09:30:00Z', 'Body')"
+            "INSERT INTO issues("
+            "id, github_id, repo_id, number, title, state, author, created_at, updated_at, body) "
+            "VALUES(10, 999, 1, 5152, 'WSL2 Support', 'open', 'nachiket', "
+            "'2026-06-29T09:00:00Z', '2026-06-29T09:30:00Z', 'Body')"
         )
         connection.commit()
 
@@ -390,7 +415,10 @@ def test_discussion_reference(tmp_path):
         with patch("httpx.get") as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.text = "<title>Architecture discussion for WSL2 · Discussion #3829 · lima-vm/lima · GitHub</title>"
+            mock_response.text = (
+                "<title>Architecture discussion for WSL2 · Discussion #3829 "
+                "· lima-vm/lima · GitHub</title>"
+            )
             mock_get.return_value = mock_response
 
             _replace_references(
@@ -403,13 +431,17 @@ def test_discussion_reference(tmp_path):
             )
 
         # Verify title is stored in the database!
-        row = connection.execute("SELECT title, reference_kind FROM extracted_references WHERE source_id = 10").fetchone()
+        row = connection.execute(
+            "SELECT title, reference_kind FROM extracted_references WHERE source_id = 10"
+        ).fetchone()
         assert row is not None
         assert row["reference_kind"] == "discussion"
         assert row["title"] == "Architecture discussion for WSL2"
 
         # Verify queries return the title field
-        payload_refs = get_issue_references(connection, repo="lima-vm/lima", issue_number=5152)
+        payload_refs = get_issue_references(
+            connection, repo="lima-vm/lima", issue_number=5152
+        )
         assert len(payload_refs) == 1
         assert payload_refs[0]["title"] == "Architecture discussion for WSL2"
         assert payload_refs[0]["reference_kind"] == "discussion"
@@ -441,7 +473,10 @@ def test_discussion_reference(tmp_path):
 
         # Web UI render
         html = _render_issue_body(payload)
-        assert "Discussion #3829 (Architecture discussion for WSL2)" in html
+        assert (
+            "Discussion #3829 (Architecture discussion for WSL2)"
+            in html
+        )
 
     finally:
         connection.close()

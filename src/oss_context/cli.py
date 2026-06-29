@@ -872,8 +872,11 @@ def open_discussion(
     settings = _load_cli_settings(db_path)
     connection = DatabaseManager(settings.db_path).initialize()
     try:
-        query_sql = "SELECT url, target_repo, title FROM extracted_references WHERE reference_kind = 'discussion' AND target_number = ?"
-        params = [number]
+        query_sql = (
+            "SELECT url, target_repo, title FROM extracted_references "
+            "WHERE reference_kind = 'discussion' AND target_number = ?"
+        )
+        params: list[object] = [number]
         if repo:
             query_sql += " AND target_repo = ?"
             params.append(repo)
@@ -884,13 +887,18 @@ def open_discussion(
                 url = f"https://github.com/{repo}/discussions/{number}"
                 title = f"Discussion #{number}"
             else:
-                repo_row = connection.execute("SELECT owner || '/' || name AS slug FROM repos LIMIT 1").fetchone()
+                repo_row = connection.execute(
+                    "SELECT owner || '/' || name AS slug FROM repos LIMIT 1"
+                ).fetchone()
                 if repo_row:
                     repo_slug = repo_row["slug"]
                     url = f"https://github.com/{repo_slug}/discussions/{number}"
                     title = f"Discussion #{number}"
                 else:
-                    console.print(f"[red]Error: Discussion #{number} not found in database, and no repo was specified.[/red]")
+                    console.print(
+                        f"[red]Error: Discussion #{number} not found in database, "
+                        "and no repo was specified.[/red]"
+                    )
                     raise typer.Exit(code=1)
         else:
             url = row["url"]
