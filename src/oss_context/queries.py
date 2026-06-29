@@ -633,6 +633,7 @@ def _reference_rows_from_query(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
             "target_sha": row["target_sha"],
             "author": row["author"],
             "file_path": row["file_path"],
+            "title": row["title"] if "title" in row.keys() else None,
         }
         for row in rows
     ]
@@ -659,6 +660,7 @@ def get_pr_references(
             er.target_repo,
             er.target_number,
             er.target_sha,
+            er.title,
             COALESCE(c.author, p.author) AS author,
             t.file_path
         FROM prs p
@@ -696,20 +698,26 @@ def get_issue_references(
         """
         SELECT
             er.source_kind,
-            'Issue body' AS source_label,
+            CASE
+                WHEN er.source_kind = 'issue' THEN 'Issue body'
+                ELSE 'Comment by ' || COALESCE(ic.author, 'unknown')
+            END AS source_label,
             er.raw_text,
             er.reference_kind,
             er.url,
             er.target_repo,
             er.target_number,
             er.target_sha,
-            i.author,
+            er.title,
+            COALESCE(i.author, ic.author) AS author,
             NULL AS file_path
         FROM issues i
         JOIN repos r ON r.id = i.repo_id
-        JOIN extracted_references er ON er.source_kind = 'issue' AND er.source_id = i.id
-        WHERE r.owner = ? AND r.name = ? AND i.number = ?
-        ORDER BY er.id ASC
+        LEFT JOIN extracted_references er ON (er.source_kind = 'issue' AND er.source_id = i.id)
+            OR (er.source_kind = 'issue_comment' AND er.source_id IN (SELECT id FROM issue_comments WHERE issue_id = i.id))
+        LEFT JOIN issue_comments ic ON er.source_kind = 'issue_comment' AND ic.id = er.source_id
+        WHERE r.owner = ? AND r.name = ? AND i.number = ? AND er.id IS NOT NULL
+        ORDER BY er.source_kind ASC, ic.created_at ASC, er.id ASC
         """,
         (repo_ref.owner, repo_ref.name, issue_number),
     ).fetchall()
@@ -731,9 +739,9 @@ def get_issue_backreferences(
             er.url,
             p.number AS pr_number,
             p.title AS pr_title,
-            i.number AS source_issue_number,
-            i.title AS source_issue_title,
-            c.author,
+            COALESCE(i.number, ci.number) AS source_issue_number,
+            COALESCE(i.title, ci.title) AS source_issue_title,
+            COALESCE(c.author, ic.author) AS author,
             t.file_path,
             r.owner || '/' || r.name AS source_repo
         FROM extracted_references er
@@ -742,7 +750,9 @@ def get_issue_backreferences(
         LEFT JOIN review_comments c ON er.source_kind = 'comment' AND c.id = er.source_id
         LEFT JOIN review_threads t ON c.thread_id = t.id
         LEFT JOIN prs cp ON t.pr_id = cp.id
-        LEFT JOIN repos r ON r.id = COALESCE(p.repo_id, i.repo_id, cp.repo_id)
+        LEFT JOIN issue_comments ic ON er.source_kind = 'issue_comment' AND ic.id = er.source_id
+        LEFT JOIN issues ci ON ic.issue_id = ci.id
+        LEFT JOIN repos r ON r.id = COALESCE(p.repo_id, i.repo_id, cp.repo_id, ci.repo_id)
         WHERE er.target_repo = ?
           AND er.target_number = ?
           AND er.reference_kind IN ('issue', 'issue_or_pr')
@@ -757,6 +767,8 @@ def get_issue_backreferences(
             source_label = f"PR #{row['pr_number']} {row['pr_title']}"
         elif row["source_kind"] == "issue":
             source_label = f"Issue #{row['source_issue_number']} {row['source_issue_title']}"
+        elif row["source_kind"] == "issue_comment":
+            source_label = f"Comment by {row['author'] or 'unknown'} on Issue #{row['source_issue_number']} {row['source_issue_title']}"
         else:
             source_label = f"Comment by {row['author'] or 'unknown'}"
         result.append(
@@ -854,6 +866,27 @@ def get_pr_health(
     )
 
 
+def get_issue_comments(
+    connection: sqlite3.Connection,
+    *,
+    repo: str,
+    issue_number: int,
+) -> list[dict[str, Any]]:
+    repo_ref = RepoRef.from_slug(repo)
+    rows = connection.execute(
+        """
+        SELECT ic.author, ic.body, ic.created_at, ic.updated_at, ic.reaction_count
+        FROM issue_comments ic
+        JOIN issues i ON ic.issue_id = i.id
+        JOIN repos r ON i.repo_id = r.id
+        WHERE r.owner = ? AND r.name = ? AND i.number = ?
+        ORDER BY ic.created_at ASC
+        """,
+        (repo_ref.owner, repo_ref.name, issue_number),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_issue_context_payload(
     connection: sqlite3.Connection,
     *,
@@ -886,6 +919,7 @@ def get_issue_context_payload(
         "labels": get_issue_labels(connection, repo=repo, issue_number=issue_number),
         "references": get_issue_references(connection, repo=repo, issue_number=issue_number),
         "mentioned_by": get_issue_backreferences(connection, repo=repo, issue_number=issue_number),
+        "comments": get_issue_comments(connection, repo=repo, issue_number=issue_number),
         "repo_status": get_repo_sync_status(connection, repo=repo),
     }
 

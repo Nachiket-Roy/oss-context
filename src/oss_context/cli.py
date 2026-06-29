@@ -858,5 +858,52 @@ def ui(
     serve_web_ui(settings, host=host, port=port)
 
 
+open_app = typer.Typer(help="Open references (e.g. discussions) in the browser or terminal.")
+app.add_typer(open_app, name="open")
+
+
+@open_app.command("discussion")
+def open_discussion(
+    number: int = typer.Argument(..., help="The discussion number to open."),
+    repo: str | None = typer.Option(None, help="The GitHub repository slug."),
+    db_path: Path | None = typer.Option(None, help="Override the SQLite database path."),
+) -> None:
+    """Open a tracked discussion link in the browser or print its URL."""
+    settings = _load_cli_settings(db_path)
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        query_sql = "SELECT url, target_repo, title FROM extracted_references WHERE reference_kind = 'discussion' AND target_number = ?"
+        params = [number]
+        if repo:
+            query_sql += " AND target_repo = ?"
+            params.append(repo)
+        
+        row = connection.execute(query_sql, params).fetchone()
+        if not row:
+            if repo:
+                url = f"https://github.com/{repo}/discussions/{number}"
+                title = f"Discussion #{number}"
+            else:
+                repo_row = connection.execute("SELECT owner || '/' || name AS slug FROM repos LIMIT 1").fetchone()
+                if repo_row:
+                    repo_slug = repo_row["slug"]
+                    url = f"https://github.com/{repo_slug}/discussions/{number}"
+                    title = f"Discussion #{number}"
+                else:
+                    console.print(f"[red]Error: Discussion #{number} not found in database, and no repo was specified.[/red]")
+                    raise typer.Exit(code=1)
+        else:
+            url = row["url"]
+            title = row["title"] or f"Discussion #{number}"
+
+        console.print(f"Opening [bold cyan]{title}[/bold cyan]...")
+        console.print(f"URL: [blue]{url}[/blue]")
+        
+        import webbrowser
+        webbrowser.open(url)
+    finally:
+        connection.close()
+
+
 if __name__ == "__main__":
     app()
