@@ -881,26 +881,39 @@ def open_discussion(
             query_sql += " AND target_repo = ?"
             params.append(repo)
         
-        row = connection.execute(query_sql, params).fetchone()
-        if not row:
+        rows = connection.execute(query_sql, params).fetchall()
+        if not rows:
             if repo:
                 url = f"https://github.com/{repo}/discussions/{number}"
                 title = f"Discussion #{number}"
             else:
-                repo_row = connection.execute(
-                    "SELECT owner || '/' || name AS slug FROM repos LIMIT 1"
-                ).fetchone()
-                if repo_row:
-                    repo_slug = repo_row["slug"]
+                repos = connection.execute(
+                    "SELECT owner || '/' || name AS slug FROM repos"
+                ).fetchall()
+                if len(repos) == 1:
+                    repo_slug = repos[0]["slug"]
                     url = f"https://github.com/{repo_slug}/discussions/{number}"
                     title = f"Discussion #{number}"
+                elif len(repos) > 1:
+                    console.print(
+                        f"[red]Error: Discussion #{number} not found in database, "
+                        "and multiple repos are tracked. Please specify --repo.[/red]"
+                    )
+                    raise typer.Exit(code=1)
                 else:
                     console.print(
                         f"[red]Error: Discussion #{number} not found in database, "
                         "and no repo was specified.[/red]"
                     )
                     raise typer.Exit(code=1)
+        elif len(rows) > 1:
+            console.print(
+                f"[red]Error: Discussion #{number} found in multiple repos. "
+                "Please specify --repo to disambiguate.[/red]"
+            )
+            raise typer.Exit(code=1)
         else:
+            row = rows[0]
             url = row["url"]
             title = row["title"] or f"Discussion #{number}"
 

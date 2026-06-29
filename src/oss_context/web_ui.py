@@ -25,7 +25,7 @@ from oss_context.review_assistant import get_merge_readiness_payload
 from oss_context.settings import Settings
 
 CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 
 :root {
   --bg-color: #080a0f;
@@ -434,7 +434,8 @@ def _reference_target(reference: dict[str, Any]) -> str:
             safe_url = _safe_external_link(url)
             if safe_url is not None:
                 return (
-                    f'<a href="{escape(safe_url, quote=True)}" target="_blank">'
+                    f'<a href="{escape(safe_url, quote=True)}" target="_blank" '
+                    f'rel="noopener noreferrer">'
                     f"{escape(text)}</a>"
                 )
         return f"<code>{escape(text)}</code>"
@@ -583,7 +584,13 @@ def _render_dashboard_body(
     repo_issues_link = ""
     issues_section = ""
     if repo:
-        owner, name = repo.split("/", maxsplit=1)
+        try:
+            owner, name = repo.split("/", maxsplit=1)
+        except ValueError:
+            return _page(
+                "Error",
+                "<p class='error'>Invalid repository format. Use owner/name.</p>"
+            )
         repo_issues_link = (
             "<section><p>"
             f"<a href='/repo/{quote(owner)}/{quote(name)}/issues'>Browse repository issues</a>"

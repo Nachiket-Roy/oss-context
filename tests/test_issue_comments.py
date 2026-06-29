@@ -115,7 +115,7 @@ async def test_sync_single_issue_with_comments(tmp_path):
     with patch("oss_context.sync.GitHubClient") as mock_gh_class:
         mock_gh_class.return_value.__aenter__.return_value = mock_client
 
-        await sync_single_issue("lima-vm/lima", 5152, settings)
+        await sync_single_issue("lima-vm/lima", 5152, settings, _depth=0)
 
     # Verify saved database state
     connection = DatabaseManager(db_path).connect()
@@ -379,7 +379,8 @@ async def test_recursive_jit_sync(tmp_path):
         connection.close()
 
 
-def test_discussion_reference(tmp_path):
+@pytest.mark.asyncio
+async def test_discussion_reference(tmp_path):
     from oss_context.formatting import render_issue_context
     from oss_context.markdown import render_issue_context_markdown
     from oss_context.queries import get_issue_references
@@ -413,7 +414,7 @@ def test_discussion_reference(tmp_path):
         connection.commit()
 
         # Mock the synchronous HTTP request for the title
-        with patch("httpx.get") as mock_get:
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.text = (
@@ -422,7 +423,7 @@ def test_discussion_reference(tmp_path):
             )
             mock_get.return_value = mock_response
 
-            _replace_references(
+            await _replace_references(
                 connection,
                 repo_id=1,
                 repo_slug="lima-vm/lima",

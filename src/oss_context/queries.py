@@ -709,7 +709,7 @@ def get_issue_references(
             er.target_number,
             er.target_sha,
             er.title,
-            COALESCE(i.author, ic.author) AS author,
+            COALESCE(ic.author, i.author) AS author,
             NULL AS file_path
         FROM issues i
         JOIN repos r ON r.id = i.repo_id

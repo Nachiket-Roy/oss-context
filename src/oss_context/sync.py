@@ -67,12 +67,13 @@ def _upsert_repo(
     return cursor.lastrowid, None
 
 
-def _fetch_discussion_title(url: str) -> str | None:
+async def _fetch_discussion_title(url: str) -> str | None:
     import re
 
     import httpx
     try:
-        response = httpx.get(url, headers={"User-Agent": "oss-context"}, timeout=5.0)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers={"User-Agent": "oss-context"}, timeout=5.0)
         if response.status_code == 200:
             match = re.search(r"<title>(?P<title>.*?)</title>", response.text, re.DOTALL)
             if match:
@@ -85,7 +86,7 @@ def _fetch_discussion_title(url: str) -> str | None:
     return None
 
 
-def _replace_references(
+async def _replace_references(
     connection: sqlite3.Connection,
     *,
     repo_id: int,
@@ -105,7 +106,7 @@ def _replace_references(
 
     for ref in references:
         if ref.kind == "discussion" and ref.url:
-            ref.title = _fetch_discussion_title(ref.url)
+            ref.title = await _fetch_discussion_title(ref.url)
 
     connection.executemany(
         """
@@ -426,7 +427,7 @@ async def sync_repository(
                         pr_id = _upsert_pr(connection, repo_id, pr)
                         synced_prs_info.append((pr_id, pr.number))
                         report.prs_synced += 1
-                        report.references_extracted += _replace_references(
+                        report.references_extracted += await _replace_references(
                             connection,
                             repo_id=repo_id,
                             repo_slug=repo.slug,
@@ -451,7 +452,7 @@ async def sync_repository(
                         pr_id = _upsert_pr(connection, repo_id, pr)
                         synced_prs_info.append((pr_id, pr.number))
                         report.prs_synced += 1
-                        report.references_extracted += _replace_references(
+                        report.references_extracted += await _replace_references(
                             connection,
                             repo_id=repo_id,
                             repo_slug=repo.slug,
@@ -475,7 +476,7 @@ async def sync_repository(
                     pr_id = _upsert_pr(connection, repo_id, pr)
                     synced_prs_info.append((pr_id, pr.number))
                     report.prs_synced += 1
-                    report.references_extracted += _replace_references(
+                    report.references_extracted += await _replace_references(
                         connection,
                         repo_id=repo_id,
                         repo_slug=repo.slug,
@@ -506,7 +507,7 @@ async def sync_repository(
                     for comment in thread.comments:
                         comment_id = _upsert_comment(connection, thread_id, comment)
                         report.comments_synced += 1
-                        report.references_extracted += _replace_references(
+                        report.references_extracted += await _replace_references(
                             connection,
                             repo_id=repo_id,
                             repo_slug=repo.slug,
@@ -538,7 +539,7 @@ async def sync_repository(
                         issue_id = _upsert_issue(connection, repo_id, iss)
                         synced_issues_info.append((issue_id, iss.number))
                         report.issues_synced += 1
-                        report.references_extracted += _replace_references(
+                        report.references_extracted += await _replace_references(
                             connection,
                             repo_id=repo_id,
                             repo_slug=repo.slug,
@@ -563,7 +564,7 @@ async def sync_repository(
                         issue_id = _upsert_issue(connection, repo_id, iss)
                         synced_issues_info.append((issue_id, iss.number))
                         report.issues_synced += 1
-                        report.references_extracted += _replace_references(
+                        report.references_extracted += await _replace_references(
                             connection,
                             repo_id=repo_id,
                             repo_slug=repo.slug,
@@ -587,7 +588,7 @@ async def sync_repository(
                     issue_id = _upsert_issue(connection, repo_id, iss)
                     synced_issues_info.append((issue_id, iss.number))
                     report.issues_synced += 1
-                    report.references_extracted += _replace_references(
+                    report.references_extracted += await _replace_references(
                         connection,
                         repo_id=repo_id,
                         repo_slug=repo.slug,
@@ -609,13 +610,33 @@ async def sync_repository(
                 else:
                     print(f"Fetched {report.issues_synced} issues", flush=True)
 
+            # One-time backfill for issue comments after upgrade
+            has_issues = connection.execute(
+                "SELECT 1 FROM issues WHERE repo_id = ? LIMIT 1", (repo_id,)
+            ).fetchone()
+            has_issue_comments = connection.execute(
+                "SELECT 1 FROM issue_comments ic "
+                "JOIN issues i ON ic.issue_id = i.id WHERE i.repo_id = ? LIMIT 1",
+                (repo_id,)
+            ).fetchone()
+
+            if has_issues and not has_issue_comments:
+                print("Performing one-time backfill of issue comments...", flush=True)
+                existing_issues = connection.execute(
+                    "SELECT id, number FROM issues WHERE repo_id = ?", (repo_id,)
+                ).fetchall()
+                synced_issue_ids = {issue_id for issue_id, _ in synced_issues_info}
+                for row in existing_issues:
+                    if row["id"] not in synced_issue_ids:
+                        synced_issues_info.append((row["id"], row["number"]))
+
             print("Fetching issue comments...", flush=True)
             for index, (issue_id, issue_number) in enumerate(synced_issues_info, start=1):
                 comments = await client.fetch_issue_comments(repo, issue_number)
                 for comment in comments:
                     comment_id = _upsert_issue_comment(connection, issue_id, comment)
                     report.comments_synced += 1
-                    report.references_extracted += _replace_references(
+                    report.references_extracted += await _replace_references(
                         connection,
                         repo_id=repo_id,
                         repo_slug=repo.slug,
@@ -674,7 +695,7 @@ async def sync_single_pr(
             )
             pr = await client.fetch_single_pull_request(repo, pr_number)
             pr_id = _upsert_pr(connection, repo_id, pr)
-            _replace_references(
+            await _replace_references(
                 connection,
                 repo_id=repo_id,
                 repo_slug=repo.slug,
@@ -688,7 +709,7 @@ async def sync_single_pr(
                 thread_id = _upsert_thread(connection, pr_id, thread)
                 for comment in thread.comments:
                     comment_id = _upsert_comment(connection, thread_id, comment)
-                    _replace_references(
+                    await _replace_references(
                         connection,
                         repo_id=repo_id,
                         repo_slug=repo.slug,
@@ -727,7 +748,7 @@ async def sync_single_issue(
             )
             issue = await client.fetch_single_issue(repo, issue_number)
             issue_id = _upsert_issue(connection, repo_id, issue)
-            _replace_references(
+            await _replace_references(
                 connection,
                 repo_id=repo_id,
                 repo_slug=repo.slug,
@@ -738,7 +759,7 @@ async def sync_single_issue(
             comments = await client.fetch_issue_comments(repo, issue_number)
             for comment in comments:
                 comment_id = _upsert_issue_comment(connection, issue_id, comment)
-                _replace_references(
+                await _replace_references(
                     connection,
                     repo_id=repo_id,
                     repo_slug=repo.slug,
