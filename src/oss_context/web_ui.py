@@ -25,198 +25,303 @@ from oss_context.review_assistant import get_merge_readiness_payload
 from oss_context.settings import Settings
 
 CSS = """
+
+
 :root {
-  --bg-color: #0c0e12;
-  --surface-color: #141721;
-  --border-color: #1e2230;
+  --bg-color: #080a0f;
+  --surface-color: #10141f;
+  --surface-hover: #151a29;
+  --border-color: #1f273b;
+  --border-focus: #3b82f6;
   --text-primary: #f3f4f6;
   --text-muted: #9ca3af;
   --blue: #3b82f6;
+  --blue-glow: rgba(59, 130, 246, 0.15);
   --green: #10b981;
   --red: #ef4444;
   --yellow: #f59e0b;
 }
+
 body {
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
   margin: 0;
   background: var(--bg-color);
+  background-image: radial-gradient(circle at 50% 0%, #151d30 0%, #080a0f 70%);
   color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
+
 header, main {
-  max-width: 1100px;
+  max-width: 1400px;
+  width: 92%;
   margin: 0 auto;
-  padding: 24px;
+  padding: 32px 0;
 }
+
 header {
-  padding-bottom: 8px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
+
+h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin: 0;
+  background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
 a {
   color: var(--blue);
   text-decoration: none;
-  transition: color 0.2s;
+  transition: all 0.2s ease;
 }
+
 a:hover {
   color: #60a5fa;
-  text-decoration: underline;
+  text-shadow: 0 0 8px rgba(96, 165, 250, 0.3);
 }
+
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
-  margin: 16px 0 28px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px;
+  margin: 24px 0 36px;
 }
+
 .card {
   background: var(--surface-color);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 20px;
+  border-radius: 12px;
+  padding: 24px;
   position: relative;
   overflow: hidden;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
 }
+
 .card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  transform: translateY(-4px);
+  border-color: var(--blue);
+  box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.3), 0 0 15px rgba(59, 130, 246, 0.2);
 }
-.card-title {
-  font-size: 0.75rem;
+
+.card .muted {
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
 .metric {
-  font-size: 2rem;
+  font-size: 2.25rem;
   font-weight: 700;
-  margin-top: 8px;
-  color: #ffffff;
-}
-.metric.blue { color: var(--blue); }
-.metric.green { color: var(--green); }
-.metric.red { color: var(--red); }
-.progress-container {
-  height: 4px;
-  background: #272a37;
-  border-radius: 2px;
   margin-top: 12px;
+  color: #ffffff;
+  letter-spacing: -0.02em;
+}
+
+.metric.blue { color: var(--blue); text-shadow: 0 0 12px rgba(59, 130, 246, 0.3); }
+.metric.green { color: var(--green); text-shadow: 0 0 12px rgba(16, 185, 129, 0.3); }
+.metric.red { color: var(--red); text-shadow: 0 0 12px rgba(239, 68, 68, 0.3); }
+
+.progress-container {
+  height: 6px;
+  background: #1b2030;
+  border-radius: 3px;
+  margin-top: 16px;
   overflow: hidden;
 }
+
 .progress-bar {
   height: 100%;
-  border-radius: 2px;
+  border-radius: 3px;
 }
+
 .progress-bar.green {
-  background: var(--green);
+  background: linear-gradient(90deg, var(--green), #34d399);
   box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
 }
+
 section {
-  margin: 28px 0;
+  margin: 36px 0;
 }
+
+h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: #f3f4f6;
+  border-left: 3px solid var(--blue);
+  padding-left: 12px;
+}
+
 table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   background: var(--surface-color);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 12px;
   overflow: hidden;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
 }
+
 th, td {
   text-align: left;
-  padding: 12px 16px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--border-color);
   vertical-align: middle;
 }
+
+tr:last-child td {
+  border-bottom: none;
+}
+
 th {
-  background: #0f1118;
+  background: #0b0e14;
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border-color);
 }
+
+tr {
+  transition: background 0.15s ease;
+}
+
+tr:hover td {
+  background: var(--surface-hover);
+}
+
 code {
-  background: rgba(255, 255, 255, 0.05);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: monospace;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-family: 'Fira Code', 'Courier New', Courier, monospace;
+  font-size: 0.85rem;
+  color: #e5e7eb;
 }
+
 pre {
   white-space: pre-wrap;
   background: var(--surface-color);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 16px;
-  color: #d1d5db;
+  border-radius: 12px;
+  padding: 20px;
+  color: #e5e7eb;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.9rem;
 }
+
 form.filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  align-items: end;
-  margin: 12px 0 24px;
+  gap: 16px;
+  align-items: flex-end;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 20px;
+  margin: 16px 0 32px;
 }
+
 label {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 0.9rem;
+  gap: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
   color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
+
 input {
-  background: var(--surface-color);
+  background: #0c0e14;
   color: var(--text-primary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 8px 12px;
+  border-radius: 8px;
+  padding: 10px 16px;
   font-size: 0.9rem;
-  transition: border-color 0.2s;
+  transition: all 0.2s ease;
 }
+
 input:focus {
   outline: none;
   border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--blue-glow);
+  background: #10141f;
 }
+
 button {
-  background: var(--blue);
+  background: linear-gradient(135deg, var(--blue) 0%, #1d4ed8 100%);
   color: white;
   border: 0;
-  border-radius: 6px;
-  padding: 10px 16px;
+  border-radius: 8px;
+  padding: 12px 24px;
   cursor: pointer;
   font-size: 0.9rem;
-  font-weight: 500;
-  transition: opacity 0.2s;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.25);
 }
+
 button:hover {
-  opacity: 0.9;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 12px rgba(59, 130, 246, 0.35);
+  opacity: 0.95;
 }
+
+button:active {
+  transform: translateY(1px);
+}
+
 .muted {
   color: var(--text-muted);
 }
+
 .error {
-  color: #fca5a5;
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 8px;
+  padding: 12px 16px;
 }
+
 nav {
   display: flex;
-  gap: 12px;
-  margin-top: 8px;
+  gap: 8px;
 }
+
 nav a {
   color: var(--text-muted);
   text-decoration: none;
-  padding: 6px 12px;
-  border-radius: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
   font-size: 0.9rem;
-  transition: all 0.2s;
+  font-weight: 500;
+  transition: all 0.2s ease;
 }
+
 nav a:hover {
   color: #fff;
   background: rgba(255, 255, 255, 0.05);
   text-decoration: none;
 }
+
 nav a.active {
-  color: var(--blue);
-  background: rgba(59, 130, 246, 0.1);
-  font-weight: 600;
+  color: #fff;
+  background: var(--blue);
+  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.2);
   text-decoration: none;
 }
 """
@@ -321,6 +426,19 @@ def _reference_target(reference: dict[str, Any]) -> str:
     repo = reference.get("target_repo")
     number = reference.get("target_number")
     kind = reference.get("reference_kind")
+    if kind == "discussion":
+        url = reference.get("url")
+        title_suffix = f" ({reference['title']})" if reference.get("title") else ""
+        text = f"Discussion #{number}{title_suffix}"
+        if url:
+            safe_url = _safe_external_link(url)
+            if safe_url is not None:
+                return (
+                    f'<a href="{escape(safe_url, quote=True)}" target="_blank" '
+                    f'rel="noopener noreferrer">'
+                    f"{escape(text)}</a>"
+                )
+        return f"<code>{escape(text)}</code>"
     if repo and number is not None and kind == "pull_request":
         return _pr_link(repo, number)
     if repo and number is not None and kind == "issue":
@@ -464,12 +582,34 @@ def _render_dashboard_body(
     ]
 
     repo_issues_link = ""
+    issues_section = ""
     if repo:
-        owner, name = repo.split("/", maxsplit=1)
+        try:
+            owner, name = repo.split("/", maxsplit=1)
+        except ValueError:
+            return _page(
+                "Error",
+                "<p class='error'>Invalid repository format. Use owner/name.</p>"
+            )
         repo_issues_link = (
             "<section><p>"
             f"<a href='/repo/{quote(owner)}/{quote(name)}/issues'>Browse repository issues</a>"
             "</p></section>"
+        )
+        issue_list = list_repo_issues(connection, repo=repo, limit=50)
+        issue_rows = [
+            [
+                _issue_link(repo, row["issue_number"], f"#{row['issue_number']} {row['title']}"),
+                escape(row["state"]),
+                escape(row["author"] or "unknown"),
+                escape(row["updated_at"] or ""),
+            ]
+            for row in issue_list
+        ]
+        issues_section = (
+            "<section><h2>Repository Issues</h2>"
+            + _table(["Issue", "State", "Author", "Last Updated"], issue_rows)
+            + "</section>"
         )
 
     return "".join(
@@ -478,12 +618,13 @@ def _render_dashboard_body(
             "".join(scope_lines),
             f'<div class="card-grid">{cards}</div>',
             repo_issues_link,
-            "<section><h2>Tracked repositories</h2>",
-            _table(
+            "" if repo else "<section><h2>Tracked repositories</h2>",
+            "" if repo else _table(
                 ["Repo", "Open PRs", "Open issues", "Unresolved", "Blocking", "Last synced"],
                 repo_rows,
             ),
-            "</section>",
+            "" if repo else "</section>",
+            issues_section if repo else "",
             "<section><h2>Unresolved threads</h2>",
             _table(
                 ["PR", "File", "Reviewer", "Decision", "Waiting on", "Summary"],
@@ -579,6 +720,14 @@ def _render_issue_body(payload: dict[str, Any]) -> str:
         ]
         for row in payload["mentioned_by"]
     ]
+    comment_rows = [
+        [
+            escape(c["author"] or "unknown"),
+            escape(c["created_at"] or ""),
+            escape(c["body"] or ""),
+        ]
+        for c in payload.get("comments", [])
+    ]
 
     last_synced = escape(payload["repo_status"]["last_synced_at"] or "never")
     return "".join(
@@ -596,6 +745,9 @@ def _render_issue_body(payload: dict[str, Any]) -> str:
             "</section>",
             "<section><h2>Mentioned by</h2>",
             _table(["Mentioned by", "Repo", "File"], mention_rows),
+            "</section>",
+            "<section><h2>Activity (Comments)</h2>",
+            _table(["Author", "Date", "Comment"], comment_rows),
             "</section>",
         ]
     )

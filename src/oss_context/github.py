@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from oss_context.models import (
+    IssueCommentData,
     IssueData,
     PullRequestData,
     RepoRef,
@@ -443,6 +444,35 @@ class GitHubClient:
                 if label.get("name")
             ],
         )
+
+    async def fetch_issue_comments(
+        self, repo: RepoRef, issue_number: int
+    ) -> list[IssueCommentData]:
+        next_url = f"/repos/{repo.owner}/{repo.name}/issues/{issue_number}/comments?per_page=100"
+        comments = []
+        while next_url:
+            response = await self._request(
+                "GET",
+                next_url,
+                operation="fetch_issue_comments",
+                repo=repo.slug,
+            )
+            items = response.json()
+            for item in items:
+                reactions = item.get("reactions") or {}
+                reaction_count = reactions.get("total_count", 0)
+                comments.append(
+                    IssueCommentData(
+                        github_comment_id=item["id"],
+                        author=(item.get("user") or {}).get("login"),
+                        body=item.get("body") or "",
+                        created_at=parse_github_datetime(item.get("created_at")),
+                        updated_at=parse_github_datetime(item.get("updated_at")),
+                        reaction_count=reaction_count,
+                    )
+                )
+            next_url = response.links.get("next", {}).get("url")
+        return comments
 
     async def check_staleness(
         self, repo: RepoRef, target_type: str, number: int

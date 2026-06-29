@@ -37,6 +37,9 @@ def _bullet_list(items: list[str]) -> str:
 
 
 def _reference_target(reference: dict) -> str:
+    if reference["reference_kind"] == "discussion":
+        title_suffix = f" ({reference['title']})" if reference.get("title") else ""
+        return _md_escape(f"Discussion #{reference['target_number']}{title_suffix}")
     if reference["url"]:
         return _md_escape(reference["url"])
     target_repo = _md_escape(reference["target_repo"])
@@ -108,6 +111,19 @@ def render_pr_context_markdown(payload: dict) -> str:
     )
 
 
+def _issue_comments_lines(comments: list[dict]) -> str:
+    if not comments:
+        return "- none"
+    lines: list[str] = []
+    for c in comments:
+        lines.append(
+            f"Comment by `{_md_code(c['author'])}` "
+            f"({_md_escape(c['created_at'])}) · "
+            f"{_md_escape(c['body'])}"
+        )
+    return _bullet_list(lines)
+
+
 def render_issue_context_markdown(payload: dict) -> str:
     return "\n".join(
         [
@@ -134,6 +150,9 @@ def render_issue_context_markdown(payload: dict) -> str:
                     for row in payload["mentioned_by"]
                 ]
             ),
+            "",
+            "## Activity (Comments)",
+            _issue_comments_lines(payload.get("comments") or []),
         ]
     )
 

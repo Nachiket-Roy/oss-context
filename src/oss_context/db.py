@@ -106,6 +106,17 @@ CREATE TABLE IF NOT EXISTS issue_labels (
     PRIMARY KEY(issue_id, label)
 );
 
+CREATE TABLE IF NOT EXISTS issue_comments (
+    id INTEGER PRIMARY KEY,
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    github_comment_id INTEGER UNIQUE,
+    author TEXT,
+    body TEXT,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    reaction_count INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS extracted_references (
     id INTEGER PRIMARY KEY,
     source_kind TEXT NOT NULL,
@@ -116,7 +127,8 @@ CREATE TABLE IF NOT EXISTS extracted_references (
     url TEXT,
     target_repo TEXT,
     target_number INTEGER,
-    target_sha TEXT
+    target_sha TEXT,
+    title TEXT
 );
 
 CREATE TABLE IF NOT EXISTS architectural_decisions (
@@ -224,6 +236,7 @@ CREATE INDEX IF NOT EXISTS idx_comments_thread ON review_comments(thread_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_pr ON decision_log(pr_id);
 CREATE INDEX IF NOT EXISTS idx_pr_labels_label ON pr_labels(label);
 CREATE INDEX IF NOT EXISTS idx_issue_labels_label ON issue_labels(label);
+CREATE INDEX IF NOT EXISTS idx_issue_comments_issue ON issue_comments(issue_id);
 CREATE INDEX IF NOT EXISTS idx_branch_links_branch ON branch_links(branch_name);
 CREATE INDEX IF NOT EXISTS idx_code_snapshots_repo_branch ON code_index_snapshots(
     repo_slug, repo_root, git_branch, indexed_at
@@ -274,6 +287,27 @@ class DatabaseManager:
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise
+
+        try:
+            connection.execute("ALTER TABLE extracted_references ADD COLUMN title TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+        # Migration to create issue_comments table and index if they don't exist dynamically
+        connection.executescript("""
+        CREATE TABLE IF NOT EXISTS issue_comments (
+            id INTEGER PRIMARY KEY,
+            issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+            github_comment_id INTEGER UNIQUE,
+            author TEXT,
+            body TEXT,
+            created_at TIMESTAMP,
+            updated_at TIMESTAMP,
+            reaction_count INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_issue_comments_issue ON issue_comments(issue_id);
+        """)
                 
         # Phase 6 migrations for adding repo_id to caches with strict constraints
         for table in ["design_summaries", "implementation_summaries", "rationale_links"]:

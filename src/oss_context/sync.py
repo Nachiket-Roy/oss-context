@@ -15,6 +15,7 @@ from oss_context.db import DatabaseManager
 from oss_context.github import GitHubClient
 from oss_context.intelligence import analyze_pending_comments
 from oss_context.models import (
+    IssueCommentData,
     IssueData,
     PullRequestData,
     RepoRef,
@@ -66,7 +67,26 @@ def _upsert_repo(
     return cursor.lastrowid, None
 
 
-def _replace_references(
+async def _fetch_discussion_title(url: str) -> str | None:
+    import re
+
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers={"User-Agent": "oss-context"}, timeout=5.0)
+        if response.status_code == 200:
+            match = re.search(r"<title>(?P<title>.*?)</title>", response.text, re.DOTALL)
+            if match:
+                title = match.group("title").strip()
+                if " · " in title:
+                    title = title.split(" · ")[0].strip()
+                return title
+    except Exception as e:
+        print(f"Warning: Failed to fetch discussion title from {url}: {e}", flush=True)
+    return None
+
+
+async def _replace_references(
     connection: sqlite3.Connection,
     *,
     repo_id: int,
@@ -84,12 +104,16 @@ def _replace_references(
     if not references:
         return 0
 
+    for ref in references:
+        if ref.kind == "discussion" and ref.url:
+            ref.title = await _fetch_discussion_title(ref.url)
+
     connection.executemany(
         """
         INSERT INTO extracted_references(
             source_kind, source_id, repo_id, reference_kind, raw_text, url,
-            target_repo, target_number, target_sha
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            target_repo, target_number, target_sha, title
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -102,6 +126,7 @@ def _replace_references(
                 reference.target_repo,
                 reference.target_number,
                 reference.target_sha,
+                reference.title,
             )
             for reference in references
         ],
@@ -310,6 +335,50 @@ def _upsert_comment(
     return cursor.lastrowid
 
 
+def _upsert_issue_comment(
+    connection: sqlite3.Connection,
+    issue_id: int,
+    comment: IssueCommentData,
+) -> int:
+    existing = connection.execute(
+        "SELECT id FROM issue_comments WHERE github_comment_id = ?",
+        (comment.github_comment_id,),
+    ).fetchone()
+    payload = (
+        issue_id,
+        comment.author,
+        comment.body,
+        _iso(comment.created_at),
+        _iso(comment.updated_at),
+        comment.reaction_count,
+        comment.github_comment_id,
+    )
+    if existing:
+        connection.execute(
+            """
+            UPDATE issue_comments
+            SET issue_id = ?, author = ?, body = ?, created_at = ?, updated_at = ?,
+                reaction_count = ?
+            WHERE github_comment_id = ?
+            """,
+            payload,
+        )
+        return existing["id"]
+
+    cursor = connection.execute(
+        """
+        INSERT INTO issue_comments(
+            issue_id, author, body, created_at, updated_at, reaction_count, github_comment_id
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        """,
+        payload,
+    )
+    if cursor.lastrowid is None:
+        raise RuntimeError("Failed to insert issue comment row")
+    return cursor.lastrowid
+
+
 async def sync_repository(
     repo_slug: str,
     settings: Settings,
@@ -358,7 +427,7 @@ async def sync_repository(
                         pr_id = _upsert_pr(connection, repo_id, pr)
                         synced_prs_info.append((pr_id, pr.number))
                         report.prs_synced += 1
-                        report.references_extracted += _replace_references(
+                        report.references_extracted += await _replace_references(
                             connection,
                             repo_id=repo_id,
                             repo_slug=repo.slug,
@@ -383,7 +452,7 @@ async def sync_repository(
                         pr_id = _upsert_pr(connection, repo_id, pr)
                         synced_prs_info.append((pr_id, pr.number))
                         report.prs_synced += 1
-                        report.references_extracted += _replace_references(
+                        report.references_extracted += await _replace_references(
                             connection,
                             repo_id=repo_id,
                             repo_slug=repo.slug,
@@ -407,7 +476,7 @@ async def sync_repository(
                     pr_id = _upsert_pr(connection, repo_id, pr)
                     synced_prs_info.append((pr_id, pr.number))
                     report.prs_synced += 1
-                    report.references_extracted += _replace_references(
+                    report.references_extracted += await _replace_references(
                         connection,
                         repo_id=repo_id,
                         repo_slug=repo.slug,
@@ -438,7 +507,7 @@ async def sync_repository(
                     for comment in thread.comments:
                         comment_id = _upsert_comment(connection, thread_id, comment)
                         report.comments_synced += 1
-                        report.references_extracted += _replace_references(
+                        report.references_extracted += await _replace_references(
                             connection,
                             repo_id=repo_id,
                             repo_slug=repo.slug,
@@ -460,6 +529,7 @@ async def sync_repository(
 
             print("Fetching issues...", flush=True)
             issues_buffer = []
+            synced_issues_info = []
             async for issue in client.iter_issues(repo, since=last_synced_at):
                 issues_buffer.append(issue)
                 if limit and report.issues_synced + len(issues_buffer) >= limit:
@@ -467,8 +537,9 @@ async def sync_repository(
                     issues_buffer = issues_buffer[:remaining]
                     for iss in issues_buffer:
                         issue_id = _upsert_issue(connection, repo_id, iss)
+                        synced_issues_info.append((issue_id, iss.number))
                         report.issues_synced += 1
-                        report.references_extracted += _replace_references(
+                        report.references_extracted += await _replace_references(
                             connection,
                             repo_id=repo_id,
                             repo_slug=repo.slug,
@@ -491,8 +562,9 @@ async def sync_repository(
                 if len(issues_buffer) == 100:
                     for iss in issues_buffer:
                         issue_id = _upsert_issue(connection, repo_id, iss)
+                        synced_issues_info.append((issue_id, iss.number))
                         report.issues_synced += 1
-                        report.references_extracted += _replace_references(
+                        report.references_extracted += await _replace_references(
                             connection,
                             repo_id=repo_id,
                             repo_slug=repo.slug,
@@ -514,8 +586,9 @@ async def sync_repository(
             if issues_buffer:
                 for iss in issues_buffer:
                     issue_id = _upsert_issue(connection, repo_id, iss)
+                    synced_issues_info.append((issue_id, iss.number))
                     report.issues_synced += 1
-                    report.references_extracted += _replace_references(
+                    report.references_extracted += await _replace_references(
                         connection,
                         repo_id=repo_id,
                         repo_slug=repo.slug,
@@ -536,6 +609,52 @@ async def sync_repository(
                     )
                 else:
                     print(f"Fetched {report.issues_synced} issues", flush=True)
+
+            # One-time backfill for issue comments after upgrade
+            has_issues = connection.execute(
+                "SELECT 1 FROM issues WHERE repo_id = ? LIMIT 1", (repo_id,)
+            ).fetchone()
+            has_issue_comments = connection.execute(
+                "SELECT 1 FROM issue_comments ic "
+                "JOIN issues i ON ic.issue_id = i.id WHERE i.repo_id = ? LIMIT 1",
+                (repo_id,)
+            ).fetchone()
+
+            if has_issues and not has_issue_comments:
+                print("Performing one-time backfill of issue comments...", flush=True)
+                existing_issues = connection.execute(
+                    "SELECT id, number FROM issues WHERE repo_id = ?", (repo_id,)
+                ).fetchall()
+                synced_issue_ids = {issue_id for issue_id, _ in synced_issues_info}
+                for row in existing_issues:
+                    if row["id"] not in synced_issue_ids:
+                        synced_issues_info.append((row["id"], row["number"]))
+
+            print("Fetching issue comments...", flush=True)
+            for index, (issue_id, issue_number) in enumerate(synced_issues_info, start=1):
+                comments = await client.fetch_issue_comments(repo, issue_number)
+                for comment in comments:
+                    comment_id = _upsert_issue_comment(connection, issue_id, comment)
+                    report.comments_synced += 1
+                    report.references_extracted += await _replace_references(
+                        connection,
+                        repo_id=repo_id,
+                        repo_slug=repo.slug,
+                        source_kind="issue_comment",
+                        source_id=comment_id,
+                        text=comment.body,
+                    )
+
+                if index % 50 == 0:
+                    connection.commit()
+
+                if index % 100 == 0 or index == len(synced_issues_info):
+                    print(
+                        f"Fetched issue comments for {index}/{len(synced_issues_info)} issues",
+                        flush=True,
+                    )
+
+            connection.commit()
 
             print("Writing to database...", flush=True)
             connection.execute(
@@ -560,10 +679,14 @@ async def sync_repository(
         connection.close()
 
 
-async def sync_single_pr(repo_slug: str, pr_number: int, settings: Settings) -> None:
+async def sync_single_pr(
+    repo_slug: str, pr_number: int, settings: Settings, _depth: int = 1
+) -> None:
     """Targeted JIT sync for a single PR, including its threads and comments."""
     repo = RepoRef.from_slug(repo_slug)
     connection = DatabaseManager(settings.db_path).initialize()
+    repo_id = None
+    pr_id = None
     try:
         async with GitHubClient(settings) as client:
             repo_data = await client.get_repo(repo)
@@ -572,7 +695,7 @@ async def sync_single_pr(repo_slug: str, pr_number: int, settings: Settings) -> 
             )
             pr = await client.fetch_single_pull_request(repo, pr_number)
             pr_id = _upsert_pr(connection, repo_id, pr)
-            _replace_references(
+            await _replace_references(
                 connection,
                 repo_id=repo_id,
                 repo_slug=repo.slug,
@@ -586,7 +709,7 @@ async def sync_single_pr(repo_slug: str, pr_number: int, settings: Settings) -> 
                 thread_id = _upsert_thread(connection, pr_id, thread)
                 for comment in thread.comments:
                     comment_id = _upsert_comment(connection, thread_id, comment)
-                    _replace_references(
+                    await _replace_references(
                         connection,
                         repo_id=repo_id,
                         repo_slug=repo.slug,
@@ -598,11 +721,25 @@ async def sync_single_pr(repo_slug: str, pr_number: int, settings: Settings) -> 
     finally:
         connection.close()
 
+    if _depth > 0 and repo_id is not None and pr_id is not None:
+        await _sync_nested_references(
+            repo_slug=repo.slug,
+            repo_id=repo_id,
+            source_kind="pr",
+            source_id=pr_id,
+            settings=settings,
+            depth=_depth - 1,
+        )
 
-async def sync_single_issue(repo_slug: str, issue_number: int, settings: Settings) -> None:
+
+async def sync_single_issue(
+    repo_slug: str, issue_number: int, settings: Settings, _depth: int = 1
+) -> None:
     """Targeted JIT sync for a single issue."""
     repo = RepoRef.from_slug(repo_slug)
     connection = DatabaseManager(settings.db_path).initialize()
+    repo_id = None
+    issue_id = None
     try:
         async with GitHubClient(settings) as client:
             repo_data = await client.get_repo(repo)
@@ -611,7 +748,7 @@ async def sync_single_issue(repo_slug: str, issue_number: int, settings: Setting
             )
             issue = await client.fetch_single_issue(repo, issue_number)
             issue_id = _upsert_issue(connection, repo_id, issue)
-            _replace_references(
+            await _replace_references(
                 connection,
                 repo_id=repo_id,
                 repo_slug=repo.slug,
@@ -619,16 +756,123 @@ async def sync_single_issue(repo_slug: str, issue_number: int, settings: Setting
                 source_id=issue_id,
                 text=issue.body,
             )
+            comments = await client.fetch_issue_comments(repo, issue_number)
+            for comment in comments:
+                comment_id = _upsert_issue_comment(connection, issue_id, comment)
+                await _replace_references(
+                    connection,
+                    repo_id=repo_id,
+                    repo_slug=repo.slug,
+                    source_kind="issue_comment",
+                    source_id=comment_id,
+                    text=comment.body,
+                )
         connection.commit()
     finally:
         connection.close()
 
+    if _depth > 0 and repo_id is not None and issue_id is not None:
+        await _sync_nested_references(
+            repo_slug=repo.slug,
+            repo_id=repo_id,
+            source_kind="issue",
+            source_id=issue_id,
+            settings=settings,
+            depth=_depth - 1,
+        )
+
+
+async def _sync_nested_references(
+    repo_slug: str,
+    repo_id: int,
+    source_kind: str,
+    source_id: int,
+    settings: Settings,
+    depth: int = 0,
+) -> None:
+    connection = DatabaseManager(settings.db_path).initialize()
+    try:
+        if source_kind == "issue":
+            ref_rows = connection.execute(
+                """
+                SELECT reference_kind, target_repo, target_number 
+                FROM extracted_references 
+                WHERE repo_id = ? AND (
+                    (source_kind = 'issue' AND source_id = ?) OR
+                    (
+                        source_kind = 'issue_comment'
+                        AND source_id IN (SELECT id FROM issue_comments WHERE issue_id = ?)
+                    )
+                )
+                """,
+                (repo_id, source_id, source_id)
+            ).fetchall()
+        elif source_kind == "pr":
+            ref_rows = connection.execute(
+                """
+                SELECT reference_kind, target_repo, target_number 
+                FROM extracted_references 
+                WHERE repo_id = ? AND (
+                    (source_kind = 'pr' AND source_id = ?) OR
+                    (source_kind = 'comment' AND source_id IN (
+                        SELECT c.id FROM review_comments c 
+                        JOIN review_threads t ON c.thread_id = t.id 
+                        WHERE t.pr_id = ?
+                    ))
+                )
+                """,
+                (repo_id, source_id, source_id)
+            ).fetchall()
+        else:
+            return
+    finally:
+        connection.close()
+
+    for row in ref_rows:
+        ref_kind = row["reference_kind"]
+        target_repo = row["target_repo"] or repo_slug
+        target_number = row["target_number"]
+        if target_number is None:
+            continue
+
+        if target_repo.lower() != repo_slug.lower():
+            continue
+
+        try:
+            if ref_kind == "pull_request":
+                await ensure_pr_synced(
+                    target_repo, target_number, settings, force_sync=False, _depth=depth
+                )
+            elif ref_kind == "issue":
+                await ensure_issue_synced(
+                    target_repo, target_number, settings, force_sync=False, _depth=depth
+                )
+            elif ref_kind == "issue_or_pr":
+                try:
+                    await ensure_pr_synced(
+                        target_repo, target_number, settings, force_sync=False, _depth=depth
+                    )
+                except Exception:
+                    await ensure_issue_synced(
+                        target_repo, target_number, settings, force_sync=False, _depth=depth
+                    )
+        except Exception as e:
+            print(
+                f"Warning: Failed to sync referenced {ref_kind} #{target_number}: {e}",
+                flush=True,
+            )
+
 
 async def ensure_pr_synced(
-    repo_slug: str, pr_number: int, settings: Settings, force_sync: bool = False
+    repo_slug: str,
+    pr_number: int,
+    settings: Settings,
+    force_sync: bool = False,
+    _depth: int = 1,
 ) -> None:
     repo = RepoRef.from_slug(repo_slug)
     connection = DatabaseManager(settings.db_path).initialize()
+    needs_sync = False
     try:
         row = connection.execute(
             "SELECT p.updated_at FROM prs p JOIN repos r ON p.repo_id = r.id "
@@ -636,7 +880,6 @@ async def ensure_pr_synced(
             (repo.owner, repo.name, pr_number)
         ).fetchone()
         
-        needs_sync = False
         if row is None or force_sync:
             needs_sync = True
         else:
@@ -652,18 +895,23 @@ async def ensure_pr_synced(
                         local_updated = local_updated.astimezone(UTC)
                     if remote_updated > local_updated:
                         needs_sync = True
-
-        if needs_sync:
-            await sync_single_pr(repo_slug, pr_number, settings)
     finally:
         connection.close()
 
+    if needs_sync:
+        await sync_single_pr(repo_slug, pr_number, settings, _depth=_depth)
+
 
 async def ensure_issue_synced(
-    repo_slug: str, issue_number: int, settings: Settings, force_sync: bool = False
+    repo_slug: str,
+    issue_number: int,
+    settings: Settings,
+    force_sync: bool = False,
+    _depth: int = 1,
 ) -> None:
     repo = RepoRef.from_slug(repo_slug)
     connection = DatabaseManager(settings.db_path).initialize()
+    needs_sync = False
     try:
         row = connection.execute(
             "SELECT i.updated_at FROM issues i JOIN repos r ON i.repo_id = r.id "
@@ -671,7 +919,6 @@ async def ensure_issue_synced(
             (repo.owner, repo.name, issue_number)
         ).fetchone()
         
-        needs_sync = False
         if row is None or force_sync:
             needs_sync = True
         else:
@@ -686,8 +933,8 @@ async def ensure_issue_synced(
                         local_updated = local_updated.astimezone(UTC)
                     if remote_updated > local_updated:
                         needs_sync = True
-
-        if needs_sync:
-            await sync_single_issue(repo_slug, issue_number, settings)
     finally:
         connection.close()
+
+    if needs_sync:
+        await sync_single_issue(repo_slug, issue_number, settings, _depth=_depth)

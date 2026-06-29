@@ -20,6 +20,9 @@ GITHUB_ISSUE_URL_RE = re.compile(
 GITHUB_COMMIT_URL_RE = re.compile(
     r"https://github\.com/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)/commit/(?P<sha>[0-9a-fA-F]{7,40})"
 )
+GITHUB_DISCUSSION_URL_RE = re.compile(
+    r"https://github\.com/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)/discussions/(?P<number>\d+)"
+)
 CROSS_REPO_REF_RE = re.compile(
     r"(?<![A-Za-z0-9_.\-/])(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)#(?P<number>\d+)"
 )
@@ -88,6 +91,18 @@ def extract_references(text: str | None, *, repo: str) -> list[ExtractedReferenc
                 url=match.group(0),
                 target_repo=f"{match.group('owner')}/{match.group('repo')}",
                 target_sha=match.group("sha"),
+            ),
+        )
+
+    for match in GITHUB_DISCUSSION_URL_RE.finditer(text):
+        add_reference(
+            match,
+            ExtractedReference(
+                kind="discussion",
+                raw_text=match.group(0),
+                url=match.group(0),
+                target_repo=f"{match.group('owner')}/{match.group('repo')}",
+                target_number=int(match.group("number")),
             ),
         )
 

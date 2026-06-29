@@ -34,9 +34,10 @@ ReferenceKind = Literal[
     "issue_or_pr",
     "commit",
     "url",
+    "discussion",
 ]
 
-SourceKind = Literal["pr", "comment", "issue"]
+SourceKind = Literal["pr", "comment", "issue", "issue_comment"]
 
 
 class RepoRef(BaseModel):
@@ -58,12 +59,21 @@ class RepoRef(BaseModel):
 class ReviewCommentData(BaseModel):
     github_comment_id: int
     author: str | None = None
-    body: str = ""
+    body: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     reaction_count: int = 0
     is_suggestion: bool = False
     suggestion_applied: bool = False
+
+
+class IssueCommentData(BaseModel):
+    github_comment_id: int
+    author: str | None = None
+    body: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    reaction_count: int = 0
 
 
 class ReviewThreadData(BaseModel):
@@ -113,6 +123,7 @@ class ExtractedReference(BaseModel):
     target_repo: str | None = None
     target_number: int | None = None
     target_sha: str | None = None
+    title: str | None = None
 
 
 class DecisionExtraction(BaseModel):

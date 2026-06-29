@@ -26,7 +26,7 @@ async def test_ensure_pr_synced_missing(tmp_path):
         await ensure_pr_synced("owner/repo", 123, settings)
 
         # Should have called sync_single_pr
-        mock_sync_pr.assert_called_once_with("owner/repo", 123, settings)
+        mock_sync_pr.assert_called_once_with("owner/repo", 123, settings, _depth=1)
 
 
 @pytest.mark.asyncio
@@ -54,7 +54,7 @@ async def test_ensure_pr_synced_stale(tmp_path):
         await ensure_pr_synced("owner/repo", 123, settings)
 
         # Should have called sync_single_pr because remote > local
-        mock_sync_pr.assert_called_once_with("owner/repo", 123, settings)
+        mock_sync_pr.assert_called_once_with("owner/repo", 123, settings, _depth=1)
 
 
 @pytest.mark.asyncio
@@ -104,4 +104,4 @@ async def test_ensure_pr_synced_force(tmp_path):
         await ensure_pr_synced("owner/repo", 123, settings, force_sync=True)
 
         # Should have called sync_single_pr due to force_sync=True
-        mock_sync_pr.assert_called_once_with("owner/repo", 123, settings)
+        mock_sync_pr.assert_called_once_with("owner/repo", 123, settings, _depth=1)

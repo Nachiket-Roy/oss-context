@@ -149,7 +149,10 @@ def _render_reference_table(rows: list[dict], *, title: str) -> Table | Text:
 
     for row in rows:
         target = row["url"] or row["target_repo"] or row["raw_text"]
-        if row["target_number"] is not None and row["target_repo"]:
+        if row["reference_kind"] == "discussion":
+            title_suffix = f" ({row['title']})" if row.get("title") else ""
+            target = f"Discussion #{row['target_number']}{title_suffix}"
+        elif row["target_number"] is not None and row["target_repo"]:
             target = f"{row['target_repo']}#{row['target_number']}"
         elif row["target_sha"] is not None and row["target_repo"]:
             target = f"{row['target_repo']}@{row['target_sha']}"
@@ -255,6 +258,23 @@ def render_issue_context(payload: dict) -> Panel:
     metrics.add_row("Labels", ", ".join(payload["labels"]) if payload["labels"] else "—")
 
     body = Text(payload["body"] or "No issue body.")
+    comments_section = []
+    if payload.get("comments"):
+        comments_table = Table(box=None, padding=(0, 1))
+        comments_table.add_column("Author", style="bold yellow")
+        comments_table.add_column("Created At", style="dim")
+        comments_table.add_column("Body")
+        for comment in payload["comments"]:
+            body_text = comment["body"] or ""
+            if len(body_text) > 200:
+                body_text = body_text[:200] + "..."
+            comments_table.add_row(
+                comment["author"] or "unknown",
+                comment["created_at"] or "",
+                body_text.replace("\r", "").replace("\n", " ")
+            )
+        comments_section = [Text(""), Text("Activity (Comments)", style="bold"), comments_table]
+
     content = Group(
         metrics,
         Text(""),
@@ -264,6 +284,7 @@ def render_issue_context(payload: dict) -> Panel:
         _render_reference_table(payload["references"], title="Outbound references"),
         Text(""),
         _render_mentions_table(payload["mentioned_by"]),
+        *comments_section,
     )
     return Panel(content, title="Issue context", border_style="cyan")
 
